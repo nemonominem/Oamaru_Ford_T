@@ -6,7 +6,7 @@ export type SurfaceType =
   | 'grass'
   | 'water';
 
-export type WeatherType = 'sun' | 'rain' | 'fog';
+export type WeatherType = 'sunny' | 'cloudy' | 'rainy' | 'snowy' | 'windy';
 
 export type TimeOfDayPreset = 'day' | 'dusk' | 'night' | 'auto';
 
@@ -18,10 +18,18 @@ export type GearSelection = 'N' | 'LOW' | 'HIGH' | 'REV';
 
 export interface EnvironmentState {
   weather: WeatherType;
+  autoWeather: boolean;
+  dayOfYear: number; // 1..365 (Southern Hemisphere: Oamaru NZ)
+  seasonName: string;
+  dateLabel: string;
+  temperatureC: number;
+  sunriseHour: number;
+  sunsetHour: number;
   timePreset: TimeOfDayPreset;
   timeHour: number; // 0..24 continuous clock
   windMps: number;
   wetness: number; // 0..1 surface dampness
+  snowCover: number; // 0..1 frost/snow accumulation
   visibilityMeters: number;
 }
 
@@ -71,26 +79,23 @@ export interface HistoricalBuilding {
 }
 
 export interface VehicleControls {
-  // Shared
   steer: number; // -1 (left) to +1 (right)
   horn: boolean;
 
-  // Standard mode inputs
   throttleInput: number; // 0..1
   brakeInput: number; // 0..1
   reverseInput: boolean;
 
-  // Authentic Model T controls
-  handThrottle: number; // 0..1 (steering column lever)
-  sparkAdvance: number; // 0..1 (0 = retarded for cranking/hills, 1 = advanced for cruise)
-  lowPedal: boolean; // Left pedal down -> Low gear
-  reversePedal: boolean; // Middle pedal down -> Reverse
-  brakePedal: boolean; // Right pedal down -> Transmission brake
-  handbrakePos: number; // 0 = forward (High gear ready), 0.5 = neutral, 1 = pulled back (Park brake + Neutral)
+  handThrottle: number; // 0..1
+  sparkAdvance: number; // 0..1
+  lowPedal: boolean;
+  reversePedal: boolean;
+  brakePedal: boolean;
+  handbrakePos: number; // 0 = High ready, 0.5 = Neutral, 1 = Park brake
 }
 
 export interface WheelTelemetry {
-  compression: number; // 0..1
+  compression: number;
   slipRatio: number;
   grounded: boolean;
   surface: SurfaceType;
@@ -105,34 +110,47 @@ export interface VehicleState {
   vx: number;
   vy: number;
   vz: number;
-  yaw: number; // radians, 0 = +Z, PI/2 = +X
-  pitch: number; // radians
-  roll: number; // radians
+  yaw: number;
+  pitch: number;
+  roll: number;
   yawRate: number;
   speedMps: number;
   speedMph: number;
   forwardSpeedMps: number;
 
-  // Engine & transmission
+  ignitionOn: boolean;
   engineRunning: boolean;
-  crankingProgress: number; // 0..1 during hand-crank
+  crankingProgress: number;
+  crankKickbackWarning: boolean;
   rpm: number;
+  engineTempC: number;
+  isOverheating: boolean;
+  backfireTrigger: number;
   stallWarning: boolean;
   knocking: boolean;
+  impactStrength: number;
+  mudAccumulation: number; // 0..1 mud/dust on mudguards
   gear: GearSelection;
-  clutchEngagement: number; // 0..1
+  clutchEngagement: number;
   handThrottle: number;
   sparkAdvance: number;
   handbrakePos: number;
   steerAngle: number;
 
-  // Environment & surface context
   currentSurface: SurfaceType;
   effectiveGrip: number;
   slopePercent: number;
   nearestLandmark: Landmark | null;
   distanceDrivenMiles: number;
 
-  // 4-wheel visual & physics state: [FL, FR, RL, RR]
+  // Circuit Timing & Courtesy Standings
+  lapCount: number;
+  nextSector: number; // 1, 2, 3, then 0 (Finish line)
+  currentLapSec: number;
+  lastLapSec: number | null;
+  bestLapSec: number | null;
+  courtesyScore: number; // 0..100
+  racePosition: number; // 1..3 against rival period tourers
+
   wheels: [WheelTelemetry, WheelTelemetry, WheelTelemetry, WheelTelemetry];
 }

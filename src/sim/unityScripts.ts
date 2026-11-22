@@ -7,76 +7,121 @@ export interface UnityScriptFile {
 export const UNITY_CSHARP_SCRIPTS: UnityScriptFile[] = [
   {
     filename: 'OamaruAtmosphereWeather.cs',
-    summary: 'Unity Time-of-Day solar/lunar lighting cycle, coastal fog, rain particle system, streetlamp activation, and wet-road traction hooks.',
+    summary: 'Unity seasonal Day-of-Year solar arc (45.1°S), likely weather selector (Sunny/Cloudy/Rainy/Snowy/Windy), particles, and traction.',
     code: `using UnityEngine;
 
-public enum OamaruWeather { Sun, Rain, Fog }
+public enum OamaruWeather { Sunny, Cloudy, Rainy, Snowy, Windy }
 
 public class OamaruAtmosphereWeather : MonoBehaviour
 {
-    [Header("Cycle & Weather")]
-    public OamaruWeather weather = OamaruWeather.Sun;
+    [Header("Season, Date & Time (Oamaru 45.1°S)")]
+    [Range(1, 365)] public int dayOfYear = 45;
     [Range(0f, 24f)] public float timeOfDayHour = 14f;
-    public bool autoCycle = false;
+    public bool autoCycleTime = false;
     public float cycleSpeedHoursPerSec = 0.6f;
+
+    [Header("Weather")]
+    public OamaruWeather weather = OamaruWeather.Sunny;
+    public bool autoSeasonalWeather = true;
 
     [Header("Scene References")]
     public Light sunLight;
     public ParticleSystem rainParticles;
+    public ParticleSystem snowParticles;
+    public ParticleSystem windDustParticles;
     public Light[] streetLamps;
     public Light[] modelTHeadlamps;
     public Material cobbleRoadMat;
 
     public float CurrentWetness { get; private set; }
+    public float CurrentSnowCover { get; private set; }
+    public float WindMetersPerSec { get; private set; }
     public float EffectiveGripMultiplier { get; private set; } = 1f;
+
+    public void SelectLikelyWeatherForDateAndTime()
+    {
+        float seasonalCos = Mathf.Cos(((dayOfYear - 355f) / 365f) * Mathf.PI * 2f);
+        bool isWinter = seasonalCos < -0.4f;
+        bool isSpring = dayOfYear >= 244 && dayOfYear <= 334;
+        float roll = Mathf.Abs(Mathf.Sin(dayOfYear * 12.9898f + Mathf.Floor(timeOfDayHour) * 78.233f) * 43758.54f) % 1f;
+
+        if (isWinter)
+        {
+            if (roll < 0.20f) weather = OamaruWeather.Sunny;
+            else if (roll < 0.54f) weather = OamaruWeather.Cloudy;
+            else if (roll < 0.76f) weather = OamaruWeather.Rainy;
+            else if (roll < 0.90f) weather = OamaruWeather.Snowy;
+            else weather = OamaruWeather.Windy;
+        }
+        else if (isSpring)
+        {
+            weather = roll < 0.26f ? OamaruWeather.Sunny : (roll < 0.56f ? OamaruWeather.Cloudy : (roll < 0.74f ? OamaruWeather.Rainy : OamaruWeather.Windy));
+        }
+        else
+        {
+            weather = roll < 0.46f ? OamaruWeather.Sunny : (roll < 0.76f ? OamaruWeather.Cloudy : (roll < 0.89f ? OamaruWeather.Rainy : OamaruWeather.Windy));
+        }
+    }
 
     void Update()
     {
-        if (autoCycle)
+        if (autoCycleTime)
         {
             timeOfDayHour = (timeOfDayHour + Time.deltaTime * cycleSpeedHoursPerSec) % 24f;
         }
 
-        // Solar elevation arc (sunrise ~6:00, sunset ~18:30)
-        float dayAngle = ((timeOfDayHour - 6f) / 12.5f) * Mathf.PI;
+        // Southern Hemisphere astronomical daylight span
+        float seasonalCos = Mathf.Cos(((dayOfYear - 355f) / 365f) * Mathf.PI * 2f);
+        float halfDay = 6.05f + seasonalCos * 1.65f;
+        float sunrise = 12.65f - halfDay;
+        float sunset = 12.65f + halfDay;
+        float dayAngle = ((timeOfDayHour - sunrise) / Mathf.Max(4f, sunset - sunrise)) * Mathf.PI;
         float sunElevation = Mathf.Sin(dayAngle);
         float nightFactor = Mathf.Clamp01((-sunElevation + 0.12f) * 1.8f);
 
-        sunLight.transform.rotation = Quaternion.Euler(Mathf.Lerp(6f, 62f, Mathf.Max(0f, sunElevation)), 130f, 0f);
-        sunLight.intensity = Mathf.Lerp(2.1f, 0.25f, nightFactor) * (weather == OamaruWeather.Sun ? 1f : 0.55f);
+        float maxElev = Mathf.Lerp(28f, 68f, (seasonalCos + 1f) * 0.5f);
+        sunLight.transform.rotation = Quaternion.Euler(Mathf.Lerp(6f, maxElev, Mathf.Max(0f, sunElevation)), 130f, 0f);
+
+        float weatherDim = weather == OamaruWeather.Sunny ? 1f : (weather == OamaruWeather.Windy ? 0.88f : 0.54f);
+        sunLight.intensity = Mathf.Lerp(2.15f, 0.25f, nightFactor) * weatherDim;
         sunLight.color = Color.Lerp(new Color(1f, 0.94f, 0.84f), new Color(0.45f, 0.56f, 0.78f), nightFactor);
 
-        // Coastal fog & rain emitters
-        float targetFog = weather == OamaruWeather.Fog ? 0.025f : (weather == OamaruWeather.Rain ? 0.011f : 0.004f);
+        float targetFog = weather == OamaruWeather.Snowy ? 0.015f : (weather == OamaruWeather.Rainy ? 0.011f : (weather == OamaruWeather.Cloudy ? 0.0068f : 0.0042f));
         RenderSettings.fog = true;
         RenderSettings.fogMode = FogMode.ExponentialSquared;
         RenderSettings.fogDensity = Mathf.Lerp(RenderSettings.fogDensity, targetFog, Time.deltaTime * 2f);
 
-        CurrentWetness = Mathf.MoveTowards(CurrentWetness, weather == OamaruWeather.Rain ? 1f : (weather == OamaruWeather.Fog ? 0.35f : 0f), Time.deltaTime * 0.4f);
+        CurrentWetness = Mathf.MoveTowards(CurrentWetness, weather == OamaruWeather.Rainy ? 1f : (weather == OamaruWeather.Cloudy ? 0.14f : 0f), Time.deltaTime * 0.4f);
+        CurrentSnowCover = Mathf.MoveTowards(CurrentSnowCover, weather == OamaruWeather.Snowy ? 1f : 0f, Time.deltaTime * 0.25f);
+        WindMetersPerSec = weather == OamaruWeather.Windy ? 14.5f + Mathf.Sin(Time.time * 0.8f) * 3.5f : (weather == OamaruWeather.Rainy ? 8f : 2f);
+
         if (cobbleRoadMat) cobbleRoadMat.SetFloat("_Glossiness", 0.22f + CurrentWetness * 0.58f);
 
-        if (rainParticles)
-        {
-            var emission = rainParticles.emission;
-            emission.enabled = weather == OamaruWeather.Rain;
-        }
+        SetEmission(rainParticles, weather == OamaruWeather.Rainy);
+        SetEmission(snowParticles, weather == OamaruWeather.Snowy);
+        SetEmission(windDustParticles, weather == OamaruWeather.Windy);
 
-        // Dusk / Night Streetlamps & Model T Brass Headlamps
         foreach (var lamp in streetLamps)
             if (lamp) lamp.intensity = nightFactor * 2.4f;
 
         foreach (var head in modelTHeadlamps)
-            if (head) head.enabled = nightFactor > 0.35f || weather == OamaruWeather.Fog;
+            if (head) head.enabled = nightFactor > 0.35f || weather == OamaruWeather.Rainy || weather == OamaruWeather.Snowy;
 
-        // Expose grip multiplier for FordModelTController & OamaruRoadSurface
-        float dew = (timeOfDayHour >= 20f || timeOfDayHour <= 6.5f) ? 0.93f : 1f;
-        EffectiveGripMultiplier = (weather == OamaruWeather.Rain ? 0.72f : (weather == OamaruWeather.Fog ? 0.88f : 1f)) * dew;
+        float dew = (timeOfDayHour >= sunset + 1f || timeOfDayHour <= sunrise) ? 0.93f : 1f;
+        EffectiveGripMultiplier = (1f - 0.28f * CurrentWetness) * (1f - 0.40f * CurrentSnowCover) * dew;
+    }
+
+    private void SetEmission(ParticleSystem ps, bool enabled)
+    {
+        if (!ps) return;
+        var em = ps.emission;
+        em.enabled = enabled;
     }
 }`,
   },
   {
     filename: 'FordModelTController.cs',
-    summary: 'Unity Rigidbody + WheelCollider Ford Model T physics with 2.9L torque curve, spark advance, and weather/dew traction integration.',
+    summary: 'Unity Rigidbody + WheelCollider Ford Model T physics with 2.9L torque curve, spark advance, and seasonal wind/traction.',
     code: `using UnityEngine;
 
 [RequireComponent(typeof(Rigidbody))]
@@ -130,9 +175,9 @@ public class FordModelTController : MonoBehaviour
         rearLeft.motorTorque = axleTorque * 0.5f;
         rearRight.motorTorque = axleTorque * 0.5f;
 
-        // Pacific coastal crosswind gust during rain
-        if (atmosphere && atmosphere.weather == OamaruWeather.Rain)
-            rb.AddForce(Vector3.left * 95f, ForceMode.Force);
+        // Pacific coastal crosswind gusts (windy & stormy days)
+        if (atmosphere && atmosphere.WindMetersPerSec > 3f)
+            rb.AddForce(Vector3.left * (atmosphere.WindMetersPerSec * 14.5f), ForceMode.Force);
 
         float brakeTorque = (brakePedalPressed ? 1600f : 0f) + (handbrakeLever > 0.75f ? 2200f : 0f);
         rearLeft.brakeTorque = brakeTorque;
@@ -152,7 +197,7 @@ public class FordModelTController : MonoBehaviour
   },
   {
     filename: 'OamaruRoadSurface.cs',
-    summary: 'Dynamic WheelCollider friction & suspension vibration for Oamaru Macadam, Cobbles, Mud Ruts, and Wharf Timber scaled by Weather.',
+    summary: 'Dynamic WheelCollider friction & suspension vibration for Oamaru Macadam, Cobbles, Mud Ruts, and Wharf Timber scaled by seasonal weather.',
     code: `using UnityEngine;
 
 public enum OamaruSurfaceType { Macadam, Cobbles, MudRuts, WharfTimber, TussockGrass }

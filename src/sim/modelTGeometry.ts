@@ -9,6 +9,10 @@ export interface ModelTRig {
   steeringWheel: THREE.Group;
   handCrank: THREE.Group;
   handbrakeLever: THREE.Group;
+  speedometerNeedle: THREE.Group;
+  ammeterNeedle: THREE.Group;
+  wiperPivot: THREE.Group;
+  fenderPaint: THREE.MeshPhysicalMaterial;
   pedals: {
     low: THREE.Mesh;
     reverse: THREE.Mesh;
@@ -38,6 +42,16 @@ export function buildFordModelT(isSoftwareGl: boolean): ModelTRig {
       metalness: 0.15,
       clearcoat: isSoftwareGl ? 0 : 0.85,
       clearcoatRoughness: 0.16,
+    })
+  );
+
+  const fenderPaint = track(
+    new THREE.MeshPhysicalMaterial({
+      color: 0x121315,
+      roughness: 0.28,
+      metalness: 0.14,
+      clearcoat: isSoftwareGl ? 0 : 0.72,
+      clearcoatRoughness: 0.2,
     })
   );
 
@@ -216,7 +230,7 @@ export function buildFordModelT(isSoftwareGl: boolean): ModelTRig {
   cowlMesh.castShadow = true;
   chassisGroup.add(cowlMesh);
 
-  // Wooden Dashboard + Brass Trim + Ignition Coil Box (visible in Cockpit View)
+  // Wooden Dashboard + Brass Trim + Ignition Coil Box + Speedometer & Ammeter (visible in Cockpit View)
   const dashBoard = new THREE.Mesh(track(new THREE.BoxGeometry(0.86, 0.44, 0.04)), hickoryWood);
   dashBoard.position.set(0, 0.80, 0.17);
   chassisGroup.add(dashBoard);
@@ -228,6 +242,78 @@ export function buildFordModelT(isSoftwareGl: boolean): ModelTRig {
   const switchPlate = new THREE.Mesh(track(new THREE.BoxGeometry(0.08, 0.09, 0.02)), polishedBrass);
   switchPlate.position.set(0.14, 0.85, 0.075);
   chassisGroup.add(switchPlate);
+
+  // Brass Stewart-Warner 1914 Speedometer on Dashboard facing Cockpit Driver (-Z)
+  const dialCanvas = document.createElement('canvas');
+  dialCanvas.width = 256;
+  dialCanvas.height = 256;
+  const dCtx = dialCanvas.getContext('2d')!;
+  dCtx.fillStyle = '#f5eedc';
+  dCtx.beginPath();
+  dCtx.arc(128, 128, 122, 0, Math.PI * 2);
+  dCtx.fill();
+  dCtx.strokeStyle = '#33291e';
+  dCtx.lineWidth = 4;
+  for (let mph = 0; mph <= 45; mph += 5) {
+    const ang = Math.PI * 0.75 + (mph / 45) * Math.PI * 1.5;
+    const x1 = 128 + Math.cos(ang) * 90;
+    const y1 = 128 + Math.sin(ang) * 90;
+    const x2 = 128 + Math.cos(ang) * 112;
+    const y2 = 128 + Math.sin(ang) * 112;
+    dCtx.beginPath();
+    dCtx.moveTo(x1, y1);
+    dCtx.lineTo(x2, y2);
+    dCtx.stroke();
+    dCtx.fillStyle = '#241c13';
+    dCtx.font = 'bold 20px Georgia, serif';
+    dCtx.textAlign = 'center';
+    dCtx.textBaseline = 'middle';
+    dCtx.fillText(String(mph), 128 + Math.cos(ang) * 68, 128 + Math.sin(ang) * 68);
+  }
+  dCtx.fillStyle = '#735634';
+  dCtx.font = 'bold 14px Georgia, serif';
+  dCtx.fillText('MPH', 128, 174);
+  const dialTex = track(new THREE.CanvasTexture(dialCanvas));
+  dialTex.colorSpace = THREE.SRGBColorSpace;
+
+  const speedoBezel = new THREE.Mesh(track(new THREE.CylinderGeometry(0.064, 0.068, 0.032, 20)), polishedBrass);
+  speedoBezel.rotation.x = Math.PI / 2;
+  speedoBezel.position.set(-0.08, 0.87, 0.144);
+  const speedoFace = new THREE.Mesh(
+    track(new THREE.CircleGeometry(0.056, 20)),
+    track(new THREE.MeshBasicMaterial({ map: dialTex }))
+  );
+  speedoFace.rotation.y = Math.PI;
+  speedoFace.position.set(-0.08, 0.87, 0.126);
+  const speedometerNeedle = new THREE.Group();
+  speedometerNeedle.position.set(-0.08, 0.87, 0.123);
+  const needleBlade = new THREE.Mesh(
+    track(new THREE.BoxGeometry(0.006, 0.044, 0.004)),
+    track(new THREE.MeshBasicMaterial({ color: 0xb22a22 }))
+  );
+  needleBlade.position.set(0, 0.018, 0);
+  speedometerNeedle.add(needleBlade);
+  chassisGroup.add(speedoBezel, speedoFace, speedometerNeedle);
+
+  // Brass Magneto Ammeter Gauge beside Speedometer
+  const ammBezel = new THREE.Mesh(track(new THREE.CylinderGeometry(0.038, 0.04, 0.028, 16)), polishedBrass);
+  ammBezel.rotation.x = Math.PI / 2;
+  ammBezel.position.set(-0.24, 0.87, 0.144);
+  const ammFace = new THREE.Mesh(
+    track(new THREE.CircleGeometry(0.032, 16)),
+    track(new THREE.MeshBasicMaterial({ color: 0xf0e7d4 }))
+  );
+  ammFace.rotation.y = Math.PI;
+  ammFace.position.set(-0.24, 0.87, 0.128);
+  const ammeterNeedle = new THREE.Group();
+  ammeterNeedle.position.set(-0.24, 0.87, 0.125);
+  const ammBlade = new THREE.Mesh(
+    track(new THREE.BoxGeometry(0.004, 0.025, 0.003)),
+    track(new THREE.MeshBasicMaterial({ color: 0x1b1917 }))
+  );
+  ammBlade.position.set(0, 0.01, 0);
+  ammeterNeedle.add(ammBlade);
+  chassisGroup.add(ammBezel, ammFace, ammeterNeedle);
 
   // 3. Open Touring Body Tub (Front & Rear seating compartment)
   const floorPan = new THREE.Mesh(track(new THREE.BoxGeometry(0.96, 0.06, 1.65)), chassisSteel);
@@ -287,6 +373,16 @@ export function buildFordModelT(isSoftwareGl: boolean): ModelTRig {
   wsGlass.renderOrder = 2;
   chassisGroup.add(wsFrameLeft, wsFrameRight, wsFrameTop, wsFrameMid, wsGlass);
 
+  // Manual Brass Windscreen Wiper mounted above Driver (-X)
+  const wiperPivot = new THREE.Group();
+  wiperPivot.position.set(-0.20, 1.58, 0.232);
+  const wiperArm = new THREE.Mesh(track(new THREE.CylinderGeometry(0.006, 0.006, 0.24, 6)), polishedBrass);
+  wiperArm.position.set(0, -0.12, 0);
+  const wiperRubber = new THREE.Mesh(track(new THREE.BoxGeometry(0.014, 0.20, 0.012)), darkRubber);
+  wiperRubber.position.set(0, -0.14, 0.012);
+  wiperPivot.add(wiperArm, wiperRubber);
+  chassisGroup.add(wiperPivot);
+
   // 5. Upright Touring Canvas Top & Steel Bows (leaves clean sightline for cockpit)
   const canopyRoof = new THREE.Mesh(track(new THREE.BoxGeometry(1.02, 0.05, 1.66)), canvasTopMat);
   canopyRoof.position.set(0, 1.72, -0.56);
@@ -311,12 +407,12 @@ export function buildFordModelT(isSoftwareGl: boolean): ModelTRig {
     chassisGroup.add(bow);
   });
 
-  // 6. Flared Mudguards (Fenders) & Running Boards
+  // 6. Flared Mudguards (Fenders) & Running Boards (mud-tintable)
   const rbGeo = track(new THREE.BoxGeometry(0.24, 0.035, 1.24));
-  const leftRB = new THREE.Mesh(rbGeo, blackPaint);
+  const leftRB = new THREE.Mesh(rbGeo, fenderPaint);
   leftRB.position.set(0.64, 0.39, -0.10);
   leftRB.castShadow = true;
-  const rightRB = new THREE.Mesh(rbGeo, blackPaint);
+  const rightRB = new THREE.Mesh(rbGeo, fenderPaint);
   rightRB.position.set(-0.64, 0.39, -0.10);
   rightRB.castShadow = true;
   chassisGroup.add(leftRB, rightRB);
@@ -346,7 +442,7 @@ export function buildFordModelT(isSoftwareGl: boolean): ModelTRig {
 
     const fGeo = track(new THREE.ExtrudeGeometry(shape, { depth: 0.25, bevelEnabled: false }));
     fGeo.rotateY(Math.PI / 2);
-    const mesh = new THREE.Mesh(fGeo, blackPaint);
+    const mesh = new THREE.Mesh(fGeo, fenderPaint);
     mesh.position.set(xPos - 0.125, 0, 0);
     mesh.castShadow = true;
     chassisGroup.add(mesh);
@@ -510,6 +606,10 @@ export function buildFordModelT(isSoftwareGl: boolean): ModelTRig {
     steeringWheel,
     handCrank,
     handbrakeLever,
+    speedometerNeedle,
+    ammeterNeedle,
+    wiperPivot,
+    fenderPaint,
     pedals: {
       low: pedalLow,
       reverse: pedalReverse,

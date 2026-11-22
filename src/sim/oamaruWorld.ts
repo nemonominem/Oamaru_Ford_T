@@ -5,7 +5,8 @@ import { TextureBundle } from './textures';
 export interface OamaruWorldHandle {
   group: THREE.Group;
   update: (elapsedTime: number) => void;
-  setAtmosphereVisuals: (wetness: number, nightFactor: number) => void;
+  getTrainPos: () => { x: number; z: number };
+  setAtmosphereVisuals: (wetness: number, snowCover: number, nightFactor: number) => void;
   dispose: () => void;
 }
 
@@ -16,7 +17,8 @@ type ArchitecturalVariant =
   | 'venetian-gothic'
   | 'greek-revival'
   | 'carriage-arch'
-  | 'portico-palazzo';
+  | 'portico-palazzo'
+  | 'clocktower-civic';
 
 interface BuildingSpec {
   x: number;
@@ -24,7 +26,7 @@ interface BuildingSpec {
   w: number;
   d: number;
   floors: number;
-  facing: 'north' | 'south' | 'west';
+  facing: 'north' | 'south' | 'east' | 'west';
   variant: ArchitecturalVariant;
   title: string;
   subtitle: string;
@@ -41,12 +43,14 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
   const group = new THREE.Group();
 
   // ---------------------------------------------------------------------------
-  // 1. Continuous Heightfield Terrain Mesh (Oamaru Town, Hills & Coastal Verge)
+  // 1. Extended Continuous Heightfield Terrain Mesh (covering Severn to Harbour)
   // ---------------------------------------------------------------------------
-  const terrainW = 400;
-  const terrainD = 380;
-  const segX = 120;
-  const segZ = 114;
+  const terrainW = 460;
+  const terrainD = 400;
+  const centerX = -15;
+  const centerZ = 15;
+  const segX = 136;
+  const segZ = 120;
   const terrainGeo = track(new THREE.PlaneGeometry(terrainW, terrainD, segX, segZ));
   terrainGeo.rotateX(-Math.PI / 2);
 
@@ -60,8 +64,11 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
   const tmpColor = new THREE.Color();
 
   for (let i = 0; i < posAttr.count; i++) {
-    const vx = posAttr.getX(i);
-    const vz = posAttr.getZ(i);
+    const vx = posAttr.getX(i) + centerX;
+    const vz = posAttr.getZ(i) + centerZ;
+    posAttr.setX(i, vx);
+    posAttr.setZ(i, vz);
+
     const { height, surface } = getTerrainHeightAndSurface(vx, vz);
     const finalY = vx > 107 ? -1.8 : height;
     posAttr.setY(i, finalY);
@@ -92,7 +99,7 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
   group.add(terrainMesh);
 
   // ---------------------------------------------------------------------------
-  // 2. Period Road Ribbons (Dynamic Wetness Roughness for Rain)
+  // 2. Extended Urban Circuit Road Ribbons
   // ---------------------------------------------------------------------------
   const addRoadRibbon = (
     xMin: number,
@@ -159,16 +166,59 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
     })
   );
 
+  // Circuit & Precinct Streets
   addRoadRibbon(-112, 12, -7.2, 7.2, 32, 6, macadamMat, 0.03);
   addRoadRibbon(12, 104, -7.2, 7.2, 26, 6, cobbleMat, 0.036);
-  addRoadRibbon(-30.8, -17.2, -95, 95, 6, 44, macadamMat, 0.028);
-  addRoadRibbon(-112, 102, -74.8, -61.2, 36, 6, macadamMat, 0.028);
-  addRoadRibbon(-111.5, -96.5, -105, 95, 6, 40, macadamMat, 0.026);
-  addRoadRibbon(88.2, 101.8, -95, 172, 6, 68, macadamMat, 0.028);
+  addRoadRibbon(-30.8, -17.2, -95, 122, 6, 48, macadamMat, 0.028);
+  addRoadRibbon(-159, 102, -74.8, -61.2, 48, 6, macadamMat, 0.028);
+  addRoadRibbon(-111.5, -96.5, -105, 125, 6, 48, macadamMat, 0.026);
+  addRoadRibbon(-159.2, -144.8, -80, 125, 6, 48, macadamMat, 0.028);
+  addRoadRibbon(-160, 102, 110.8, 125.2, 54, 6, macadamMat, 0.03);
+  addRoadRibbon(88.2, 101.8, -95, 135, 6, 54, macadamMat, 0.028);
   addRoadRibbon(88.2, 101.8, -22, 22, 6, 14, cobbleMat, 0.038);
   addRoadRibbon(12, 86, -61.5, -45, 22, 8, mudMat, 0.025);
 
-  // Narrow-Gauge Harbour Railway Tracks
+  // Start / Finish 1914 Trial Timber Banner Arch spanning Harbour Street at x = -56
+  const startBaseH = getTerrainHeightAndSurface(-56, 0).height;
+  const bannerPostMat = track(new THREE.MeshStandardMaterial({ color: 0x3b2a1c, roughness: 0.85 }));
+  const bannerTex = textures.createSignTexture(
+    '1914 Oamaru Reliability Trial',
+    'Start / Finish · Victorian Urban Circuit',
+    '#221b15',
+    '#e8c474'
+  );
+  const bannerMat = track(new THREE.MeshStandardMaterial({ map: bannerTex, roughness: 0.6 }));
+
+  const archGroup = new THREE.Group();
+  archGroup.position.set(-56, startBaseH, 0);
+  const postGeo = track(new THREE.CylinderGeometry(0.14, 0.16, 6.2, 10));
+  [-7.5, 7.5].forEach((pz) => {
+    const post = new THREE.Mesh(postGeo, bannerPostMat);
+    post.position.set(0, 3.1, pz);
+    post.castShadow = true;
+    archGroup.add(post);
+  });
+  const bannerBoard = new THREE.Mesh(track(new THREE.BoxGeometry(0.28, 1.4, 15.6)), bannerMat);
+  bannerBoard.position.set(0, 5.4, 0);
+  bannerBoard.castShadow = true;
+  archGroup.add(bannerBoard);
+
+  // Painted white chalk start line on macadam road
+  const chalkMat = track(
+    new THREE.MeshBasicMaterial({
+      color: 0xf0e9d8,
+      polygonOffset: true,
+      polygonOffsetFactor: -3,
+      polygonOffsetUnits: -3,
+    })
+  );
+  const startLine = new THREE.Mesh(track(new THREE.PlaneGeometry(0.55, 13.8)), chalkMat);
+  startLine.rotation.x = -Math.PI / 2;
+  startLine.position.set(0, 0.09, 0);
+  archGroup.add(startLine);
+  group.add(archGroup);
+
+  // Harbour Narrow-Gauge Railway Tracks
   const railMat = track(new THREE.MeshStandardMaterial({ color: 0x3b3530, roughness: 0.45, metalness: 0.82 }));
   const tieMat = track(new THREE.MeshStandardMaterial({ color: 0x3d2f22, roughness: 0.9 }));
   const addRailLine = (x1: number, z1: number, x2: number, z2: number) => {
@@ -200,8 +250,77 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
   sleeperInst.computeBoundingSphere();
   group.add(sleeperInst);
 
+  // 1914 NZR Harbour Steam Shunting Locomotive & Timber Coal Wagon (on z = -52 siding)
+  const locoIronMat = track(new THREE.MeshStandardMaterial({ color: 0x1d1e20, roughness: 0.45, metalness: 0.65 }));
+  const locoCabMat = track(new THREE.MeshStandardMaterial({ color: 0x26382b, roughness: 0.55, metalness: 0.25 }));
+  const locoBrassMat = track(new THREE.MeshStandardMaterial({ color: 0xd4a448, roughness: 0.24, metalness: 0.9 }));
+  const locoCoalMat = track(new THREE.MeshStandardMaterial({ color: 0x171718, roughness: 0.95 }));
+  const steamPuffMat = track(
+    new THREE.MeshStandardMaterial({ color: 0xf1f4f7, roughness: 0.95, transparent: true, opacity: 0.68, depthWrite: false })
+  );
+
+  const trainGroup = new THREE.Group();
+  trainGroup.position.set(50, 1.09, -52);
+
+  // Boiler barrel + saddle tank + brass steam dome + smokestack
+  const boiler = new THREE.Mesh(track(new THREE.CylinderGeometry(0.68, 0.68, 3.2, 14)), locoIronMat);
+  boiler.rotation.z = Math.PI / 2;
+  boiler.position.set(0.65, 1.52, 0);
+  boiler.castShadow = true;
+  const smokebox = new THREE.Mesh(track(new THREE.CylinderGeometry(0.71, 0.71, 0.72, 14)), locoIronMat);
+  smokebox.rotation.z = Math.PI / 2;
+  smokebox.position.set(2.35, 1.52, 0);
+  const stack = new THREE.Mesh(track(new THREE.CylinderGeometry(0.18, 0.14, 1.05, 10)), locoIronMat);
+  stack.position.set(2.35, 2.48, 0);
+  stack.castShadow = true;
+  const dome = new THREE.Mesh(track(new THREE.SphereGeometry(0.28, 12, 10)), locoBrassMat);
+  dome.position.set(0.85, 2.25, 0);
+  const headlamp = new THREE.Mesh(track(new THREE.CylinderGeometry(0.14, 0.14, 0.2, 10)), locoBrassMat);
+  headlamp.rotation.z = Math.PI / 2;
+  headlamp.position.set(2.74, 2.02, 0);
+  const frame = new THREE.Mesh(track(new THREE.BoxGeometry(5.1, 0.28, 1.48)), locoIronMat);
+  frame.position.set(0.35, 0.68, 0);
+  const cab = new THREE.Mesh(track(new THREE.BoxGeometry(1.65, 1.85, 1.56)), locoCabMat);
+  cab.position.set(-1.32, 1.72, 0);
+  cab.castShadow = true;
+  const cabRoof = new THREE.Mesh(track(new THREE.BoxGeometry(1.9, 0.12, 1.72)), locoIronMat);
+  cabRoof.position.set(-1.32, 2.68, 0);
+
+  // Coupled timber coal/timber wagon trailing behind
+  const wagon = new THREE.Mesh(track(new THREE.BoxGeometry(3.1, 0.88, 1.48)), tieMat);
+  wagon.position.set(-4.35, 1.02, 0);
+  wagon.castShadow = true;
+  const coalPile = new THREE.Mesh(track(new THREE.BoxGeometry(2.8, 0.35, 1.25)), locoCoalMat);
+  coalPile.position.set(-4.35, 1.52, 0);
+
+  trainGroup.add(boiler, smokebox, stack, dome, headlamp, frame, cab, cabRoof, wagon, coalPile);
+
+  const trainWheels: THREE.Mesh[] = [];
+  const locoWheelGeo = track(new THREE.CylinderGeometry(0.36, 0.36, 0.14, 12));
+  locoWheelGeo.rotateX(Math.PI / 2);
+  [-5.2, -3.5, -1.6, 0.15, 1.55].forEach((wx) => {
+    [-0.56, 0.56].forEach((wz) => {
+      const w = new THREE.Mesh(locoWheelGeo, locoIronMat);
+      w.position.set(wx, 0.36, wz);
+      trainGroup.add(w);
+      trainWheels.push(w);
+    });
+  });
+
+  // Rising steam puffs above smokestack
+  const steamPuffs: THREE.Mesh[] = [];
+  const puffGeo = track(new THREE.SphereGeometry(0.24, 8, 6));
+  for (let p = 0; p < 7; p++) {
+    const puff = new THREE.Mesh(puffGeo, steamPuffMat);
+    puff.position.set(2.35, 3.0 + p * 0.55, 0);
+    trainGroup.add(puff);
+    steamPuffs.push(puff);
+  }
+  group.add(trainGroup);
+  let currentTrainX = 50;
+
   // ---------------------------------------------------------------------------
-  // 3. Oamaru Harbour Seawall, Sumpter Wharf & SS Oamaru Steamship
+  // 3. Harbour Seawall, Sumpter Wharf & SS Oamaru Steamship
   // ---------------------------------------------------------------------------
   const limestoneMat = track(
     new THREE.MeshStandardMaterial({
@@ -243,16 +362,6 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
   wharfDeck.castShadow = true;
   group.add(wharfDeck);
 
-  const curbGeo = track(new THREE.BoxGeometry(64, 0.24, 0.28));
-  [-7.05, 7.05].forEach((cz) => {
-    const curb = new THREE.Mesh(curbGeo, wharfMat);
-    curb.position.set(135.5, 1.18, cz);
-    group.add(curb);
-  });
-  const endCurb = new THREE.Mesh(track(new THREE.BoxGeometry(0.45, 0.45, 14.4)), wharfMat);
-  endCurb.position.set(167.8, 1.25, 0);
-  group.add(endCurb);
-
   const pilingGeo = track(new THREE.CylinderGeometry(0.22, 0.24, 4.2, 10));
   const pilingMat = track(new THREE.MeshStandardMaterial({ color: 0x3a2e22, roughness: 0.9 }));
   const pilings = new THREE.InstancedMesh(pilingGeo, pilingMat, 22);
@@ -270,7 +379,6 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
   pilings.computeBoundingSphere();
   group.add(pilings);
 
-  // Moored Steamship ("SS Oamaru")
   const shipGroup = new THREE.Group();
   shipGroup.position.set(148, -1.1, -18.5);
   const hullMat = track(new THREE.MeshStandardMaterial({ color: 0x202428, roughness: 0.65, metalness: 0.3 }));
@@ -311,16 +419,8 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
   ocean.position.set(226, -1.3, 10);
   group.add(ocean);
 
-  const breakwater = new THREE.Mesh(
-    track(new THREE.BoxGeometry(90, 2.8, 9)),
-    track(new THREE.MeshStandardMaterial({ color: 0x6e6a63, roughness: 0.95 }))
-  );
-  breakwater.position.set(175, -0.4, 72);
-  breakwater.rotation.y = 0.45;
-  group.add(breakwater);
-
   // ---------------------------------------------------------------------------
-  // 4. Authentic Historical Whitestone Victorian Buildings
+  // 4. Historical Whitestone Victorian Buildings (Extended Precinct + Thames & Severn)
   // ---------------------------------------------------------------------------
   const ironRoofMat = track(
     new THREE.MeshStandardMaterial({
@@ -363,6 +463,7 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
   );
 
   const buildings: BuildingSpec[] = [
+    // Harbour St North Arcade
     {
       x: -2,
       z: -24,
@@ -409,6 +510,7 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
       subtitle: 'Port Authority · Est. 1876',
       signBg: '#1c2b33',
     },
+    // Harbour St South Arcade
     {
       x: 0,
       z: 25,
@@ -455,6 +557,7 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
       subtitle: 'Steamship & Rail Inn · 1881',
       signBg: '#321c1d',
     },
+    // Criterion Hotel & Union Bank
     {
       x: -48,
       z: 23,
@@ -490,6 +593,7 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
       subtitle: 'Oamaru Branch · Est. 1866',
       signBg: '#1c242b',
     },
+    // Forrester Gallery (Bank of NSW) on Thames & Itchen
     {
       x: -82,
       z: -48,
@@ -502,6 +606,78 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
       subtitle: 'Thames St Portico · Est. 1883',
       signBg: '#1f232c',
     },
+    // Extended Thames–Severn Civic Block
+    {
+      x: -126,
+      z: -20,
+      w: 20,
+      d: 22,
+      floors: 2,
+      facing: 'east',
+      variant: 'clocktower-civic',
+      title: 'Chief Post Office',
+      subtitle: 'Oamaru Postal & Telegraph · 1884',
+      signBg: '#2b201b',
+    },
+    {
+      x: -126,
+      z: 18,
+      w: 22,
+      d: 24,
+      floors: 3,
+      facing: 'east',
+      variant: 'corinthian-temple',
+      title: 'Oamaru Opera House',
+      subtitle: 'Municipal Theatre · Est. 1907',
+      signBg: '#331d21',
+    },
+    {
+      x: -128,
+      z: 52,
+      w: 20,
+      d: 24,
+      floors: 2,
+      facing: 'west',
+      variant: 'portico-palazzo',
+      title: 'Waitaki Courthouse',
+      subtitle: 'Magistrates Court · Est. 1883',
+      signBg: '#1f2429',
+    },
+    {
+      x: -128,
+      z: 84,
+      w: 20,
+      d: 24,
+      floors: 2,
+      facing: 'west',
+      variant: 'greek-revival',
+      title: 'Oamaru Athenaeum',
+      subtitle: 'Mechanics Institute & Library',
+    },
+    // Southern Wansbeck / Wanbrow Terrace Villas
+    {
+      x: 52,
+      z: 92,
+      w: 24,
+      d: 20,
+      floors: 2,
+      facing: 'south',
+      variant: 'italianate-verandah',
+      title: 'Wanbrow Marine Villa',
+      subtitle: 'Harbour Master Residence',
+      signBg: '#212b26',
+    },
+    {
+      x: -60,
+      z: 92,
+      w: 24,
+      d: 20,
+      floors: 2,
+      facing: 'south',
+      variant: 'greek-revival',
+      title: 'Waitaki Woollen Annex',
+      subtitle: 'South Terrace Stores',
+    },
   ];
 
   const buildHistoricalFacade = (spec: BuildingSpec) => {
@@ -509,27 +685,21 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
     const baseH = getTerrainHeightAndSurface(spec.x, spec.z).height;
     bGroup.position.set(spec.x, baseH, spec.z);
 
-    // Local +Z faces outward from front facade; rotate entire building if facing north or west
     if (spec.facing === 'north') bGroup.rotation.y = Math.PI;
     else if (spec.facing === 'west') bGroup.rotation.y = -Math.PI / 2;
+    else if (spec.facing === 'east') bGroup.rotation.y = Math.PI / 2;
 
     const floorH = 4.1;
     const totalH = spec.floors * floorH;
     const frontZ = spec.d * 0.5 + 0.05;
-
     const upperMat = spec.variant === 'venetian-gothic' ? polychromeMat : limestoneMat;
 
-    // Ground floor rusticated masonry
-    const groundMesh = new THREE.Mesh(
-      track(new THREE.BoxGeometry(spec.w, floorH, spec.d)),
-      rusticatedMat
-    );
+    const groundMesh = new THREE.Mesh(track(new THREE.BoxGeometry(spec.w, floorH, spec.d)), rusticatedMat);
     groundMesh.position.y = floorH * 0.5;
     groundMesh.castShadow = true;
     groundMesh.receiveShadow = true;
     bGroup.add(groundMesh);
 
-    // Upper storeys
     if (spec.floors > 1) {
       const upperH = (spec.floors - 1) * floorH;
       const upperMesh = new THREE.Mesh(
@@ -542,23 +712,15 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
       bGroup.add(upperMesh);
     }
 
-    // Projecting Dentil Cornice & Parapet
-    const cornice = new THREE.Mesh(
-      track(new THREE.BoxGeometry(spec.w + 0.6, 0.52, spec.d + 0.6)),
-      limestoneMat
-    );
+    const cornice = new THREE.Mesh(track(new THREE.BoxGeometry(spec.w + 0.6, 0.52, spec.d + 0.6)), limestoneMat);
     cornice.position.y = totalH + 0.25;
     cornice.castShadow = true;
     bGroup.add(cornice);
 
-    const parapet = new THREE.Mesh(
-      track(new THREE.BoxGeometry(spec.w + 0.1, 0.95, spec.d + 0.1)),
-      limestoneMat
-    );
+    const parapet = new THREE.Mesh(track(new THREE.BoxGeometry(spec.w + 0.1, 0.95, spec.d + 0.1)), limestoneMat);
     parapet.position.y = totalH + 0.85;
     bGroup.add(parapet);
 
-    // Roof
     const roofMesh = new THREE.Mesh(
       track(new THREE.ConeGeometry(Math.max(spec.w, spec.d) * 0.62, 2.8, 4)),
       ironRoofMat
@@ -567,7 +729,6 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
     roofMesh.position.y = totalH + 1.8;
     bGroup.add(roofMesh);
 
-    // Columns / Pilasters
     const cols = Math.max(3, Math.floor(spec.w / 4.2));
     const isRoundCol = spec.variant === 'corinthian-temple' || spec.variant === 'portico-palazzo';
     const pilasterGeo = isRoundCol
@@ -582,7 +743,6 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
       bGroup.add(pilaster);
     }
 
-    // Arched Victorian Sash Windows & Ground Doors
     const winGeo = track(new THREE.PlaneGeometry(1.75, 2.55));
     const doorGeo = track(new THREE.BoxGeometry(2.6, 3.3, 0.18));
 
@@ -602,9 +762,24 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
       }
     }
 
-    // Variant-specific Historical Architectural Details
+    if (spec.variant === 'clocktower-civic') {
+      // Oamaru Chief Post Office square limestone clocktower
+      const tower = new THREE.Mesh(track(new THREE.BoxGeometry(4.4, 7.2, 4.4)), limestoneMat);
+      tower.position.set(0, totalH + 3.6, frontZ - 3.5);
+      tower.castShadow = true;
+      const clockFace = new THREE.Mesh(
+        track(new THREE.CylinderGeometry(1.15, 1.15, 0.2, 16)),
+        track(new THREE.MeshStandardMaterial({ color: 0xf4efe3, roughness: 0.4 }))
+      );
+      clockFace.rotation.x = Math.PI / 2;
+      clockFace.position.set(0, totalH + 5.2, frontZ - 1.25);
+      const spire = new THREE.Mesh(track(new THREE.ConeGeometry(3.2, 3.4, 4)), ironRoofMat);
+      spire.rotation.y = Math.PI / 4;
+      spire.position.set(0, totalH + 8.8, frontZ - 3.5);
+      bGroup.add(tower, clockFace, spire);
+    }
+
     if (spec.variant === 'corinthian-temple' || spec.variant === 'portico-palazzo') {
-      // Classical Triangular Pediment + Urn Finials
       const pedShape = new THREE.Shape();
       const pw = Math.min(spec.w * 0.58, 10);
       pedShape.moveTo(-pw * 0.5, 0);
@@ -618,7 +793,6 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
       ped.position.set(0, totalH + 1.28, frontZ - 0.35);
       bGroup.add(ped);
 
-      // Parapet urn finials
       const urnGeo = track(new THREE.CylinderGeometry(0.24, 0.14, 0.72, 10));
       [-spec.w * 0.42, 0, spec.w * 0.42].forEach((ux, idx) => {
         const urn = new THREE.Mesh(urnGeo, limestoneMat);
@@ -627,7 +801,6 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
       });
 
       if (spec.variant === 'portico-palazzo') {
-        // Monumental Portico Steps & Projecting Columns (Forrester Gallery / Bank of NSW)
         const steps = new THREE.Mesh(track(new THREE.BoxGeometry(8.6, 0.75, 2.6)), rusticatedMat);
         steps.position.set(0, 0.38, frontZ + 1.1);
         bGroup.add(steps);
@@ -638,7 +811,6 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
     }
 
     if (spec.variant === 'grain-hoist') {
-      // Triangular Pediment with Circular Oculus + Projecting Sack Hoist Beam
       const pedShape = new THREE.Shape();
       pedShape.moveTo(-4.4, 0);
       pedShape.lineTo(4.4, 0);
@@ -657,7 +829,6 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
     }
 
     if (spec.variant === 'venetian-gothic') {
-      // Maritime Flagpole & Port Authority Crest on Oamaru Harbour Board
       const pole = new THREE.Mesh(track(new THREE.CylinderGeometry(0.05, 0.08, 6.2, 8)), wroughtIronMat);
       pole.position.set(0, totalH + 4.1, frontZ - 0.5);
       bGroup.add(pole);
@@ -671,7 +842,6 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
     }
 
     if (spec.variant === 'italianate-verandah') {
-      // Two-Storey Cast-Iron Lacework Verandah (Criterion & Imperial Hotels)
       const vDepth = 3.2;
       const vZ = spec.d * 0.5 + vDepth * 0.5;
       const balconyFloor = new THREE.Mesh(track(new THREE.BoxGeometry(spec.w, 0.16, vDepth)), wroughtIronMat);
@@ -693,16 +863,11 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
         bGroup.add(post);
       }
 
-      // Filigree iron lacework balustrade
-      const laceBalustrade = new THREE.Mesh(
-        track(new THREE.PlaneGeometry(spec.w, 0.95)),
-        ironLaceMat
-      );
+      const laceBalustrade = new THREE.Mesh(track(new THREE.PlaneGeometry(spec.w, 0.95)), ironLaceMat);
       laceBalustrade.position.set(0, floorH + 0.36, spec.d * 0.5 + vDepth - 0.15);
       bGroup.add(laceBalustrade);
     }
 
-    // Painted Victorian Fascia Signboard
     const signTex = textures.createSignTexture(spec.title, spec.subtitle, spec.signBg);
     const signMat = track(new THREE.MeshStandardMaterial({ map: signTex, roughness: 0.65 }));
     const signBoard = new THREE.Mesh(track(new THREE.BoxGeometry(spec.w * 0.72, 1.32, 0.16)), signMat);
@@ -715,7 +880,7 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
   buildings.forEach(buildHistoricalFacade);
 
   // ---------------------------------------------------------------------------
-  // 5. Cast-Iron Victorian Streetlamps (with Dynamic Dusk/Night Glow), Cargo & Trees
+  // 5. Streetlamps, Trees & Seasonal Snow/Wetness Materials
   // ---------------------------------------------------------------------------
   const lampPostGeo = track(new THREE.CylinderGeometry(0.06, 0.13, 4.6, 8));
   const lampHeadGeo = track(new THREE.SphereGeometry(0.24, 10, 8));
@@ -729,10 +894,15 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
   );
 
   const lampCoords: [number, number][] = [];
-  for (let lx = -85; lx <= 85; lx += 28) {
+  for (let lx = -90; lx <= 85; lx += 30) {
     lampCoords.push([lx, -8.8], [lx, 8.8]);
   }
-  lampCoords.push([-32, -32], [-16, -42], [-32, 42], [-16, 48], [103, -12], [103, 12], [134, -6.2], [134, 6.2]);
+  for (let lz = -55; lz <= 105; lz += 32) {
+    lampCoords.push([-112.5, lz], [-143.5, lz], [87.5, lz]);
+  }
+  for (let lx = -135; lx <= 75; lx += 35) {
+    lampCoords.push([lx, 109.5]);
+  }
 
   const postInst = new THREE.InstancedMesh(lampPostGeo, wroughtIronMat, lampCoords.length);
   const headInst = new THREE.InstancedMesh(lampHeadGeo, lampGlowMat, lampCoords.length);
@@ -753,57 +923,31 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
   headInst.computeBoundingSphere();
   group.add(postInst, headInst);
 
-  // Key streetlamp PointLights along Harbour St & Wharf (soft warm pools at Dusk/Night)
   const streetPointLights: THREE.PointLight[] = [];
   const lightPositions: [number, number][] = [
     [-46, 8.8],
     [-12, -8.8],
     [22, 8.8],
     [56, -8.8],
-    [98, 0],
-    [134, 6.2],
+    [95, 45],
+    [20, 118],
+    [-104, -30],
+    [-152, 35],
   ];
   lightPositions.forEach(([px, pz]) => {
     const py = getTerrainHeightAndSurface(px, pz).height;
-    const pl = new THREE.PointLight(0xffb95e, 0, 26, 1.7);
+    const pl = new THREE.PointLight(0xffb95e, 0, 28, 1.7);
     pl.position.set(px, py + 4.8, pz);
     group.add(pl);
     streetPointLights.push(pl);
   });
 
-  // Cargo Crates & Wool Bales
-  const crateGeo = track(new THREE.BoxGeometry(1.1, 0.95, 1.1));
-  const crateMat = track(new THREE.MeshStandardMaterial({ color: 0x7c5a37, roughness: 0.85 }));
-  const cratePositions: [number, number][] = [
-    [118, -5.3],
-    [119.3, -5.2],
-    [118.6, -4.1],
-    [142, 5.2],
-    [143.4, 5.1],
-    [26, -9.8],
-    [27.4, -9.8],
-    [48, 9.6],
-  ];
-  const crateInst = new THREE.InstancedMesh(crateGeo, crateMat, cratePositions.length);
-  cratePositions.forEach(([cx, cz], i) => {
-    const cy = getTerrainHeightAndSurface(cx, cz).height;
-    dummy.position.set(cx, cy + 0.48, cz);
-    dummy.rotation.set(0, (i * 0.47) % Math.PI, 0);
-    dummy.scale.set(1, 1, 1);
-    dummy.updateMatrix();
-    crateInst.setMatrixAt(i, dummy.matrix);
-  });
-  crateInst.castShadow = true;
-  crateInst.computeBoundingSphere();
-  group.add(crateInst);
-
-  // Otago Cabbage Trees & Norfolk Pines
+  // Otago Cabbage Trees & Norfolk Pines along verges & hillsides
   const treeCoords: [number, number][] = [
-    [-125, -45], [-132, -18], [-128, 22], [-135, 55], [-122, 85],
-    [76, 82], [65, 96], [112, 108], [82, 118], [72, 142],
-    [110, 145], [58, -92], [18, -95], [-55, -92], [-88, -88],
-    [78, -88], [-64, 82], [-42, 88], [15, 86], [42, 92],
-    [115, 78], [-145, -75], [-152, 42], [-148, 98],
+    [-172, -45], [-176, -10], [-174, 30], [-176, 72], [-170, 110],
+    [76, 134], [42, 136], [-12, 138], [-65, 136], [-125, 136],
+    [112, 108], [115, 78], [58, -92], [18, -95], [-55, -92],
+    [-88, -88], [78, -88], [-175, -80], [-172, 145], [108, 135],
   ];
   const trunkGeo = track(new THREE.CylinderGeometry(0.18, 0.34, 4.4, 7));
   const trunkMat = track(new THREE.MeshStandardMaterial({ color: 0x4e3e2d, roughness: 0.92 }));
@@ -838,22 +982,55 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
   if (canopyInst.instanceColor) canopyInst.instanceColor.needsUpdate = true;
   group.add(trunkInst, canopyInst);
 
+  const cNormalTerrain = new THREE.Color(0xffffff);
+  const cSnowTerrain = new THREE.Color(0xeef3f8);
+  const cNormalRoad = new THREE.Color(0xffffff);
+  const cSnowRoad = new THREE.Color(0xd6dfe8);
+  const cNormalRoof = new THREE.Color(0xffffff);
+  const cSnowRoof = new THREE.Color(0xe9eff5);
+
   return {
     group,
     update: (elapsedTime: number) => {
       shipGroup.position.y = -1.08 + Math.sin(elapsedTime * 1.1) * 0.07;
       shipGroup.rotation.z = Math.sin(elapsedTime * 0.85) * 0.012;
       shipGroup.rotation.x = Math.cos(elapsedTime * 0.65) * 0.008;
+
+      // Chug shunting locomotive smoothly back and forth along Harbour siding (x: 24..76)
+      const prevTrainX = currentTrainX;
+      currentTrainX = 50 + Math.sin(elapsedTime * 0.14) * 26;
+      const trainVel = currentTrainX - prevTrainX;
+      trainGroup.position.x = currentTrainX;
+      for (let i = 0; i < trainWheels.length; i++) {
+        trainWheels[i].rotation.z -= trainVel / 0.36;
+      }
+      for (let i = 0; i < steamPuffs.length; i++) {
+        const phase = (elapsedTime * 0.85 + i / steamPuffs.length) % 1;
+        const puff = steamPuffs[i];
+        puff.position.set(
+          2.35 - phase * 1.4,
+          2.95 + phase * 3.1,
+          Math.sin(elapsedTime * 2.1 + i) * 0.25 * phase
+        );
+        const sc = 0.65 + phase * 1.7;
+        puff.scale.setScalar(sc);
+      }
     },
-    setAtmosphereVisuals: (wetness: number, nightFactor: number) => {
-      // Wet road specular sheen during rain
+    getTrainPos: () => ({ x: currentTrainX, z: -52 }),
+    setAtmosphereVisuals: (wetness: number, snowCover: number, nightFactor: number) => {
       cobbleMat.roughness = 0.78 - wetness * 0.56;
       cobbleMat.metalness = 0.08 + wetness * 0.16;
       macadamMat.roughness = 0.9 - wetness * 0.44;
       wharfMat.roughness = 0.84 - wetness * 0.5;
       mudMat.roughness = 0.58 - wetness * 0.4;
 
-      // Streetlamp & Victorian window warm glow at dusk/night
+      // Snow / winter frost accumulation across verges, roofs & road shoulders
+      terrainMat.color.copy(cNormalTerrain).lerp(cSnowTerrain, snowCover * 0.78);
+      macadamMat.color.copy(cNormalRoad).lerp(cSnowRoad, snowCover * 0.62);
+      cobbleMat.color.copy(cNormalRoad).lerp(cSnowRoad, snowCover * 0.45);
+      ironRoofMat.color.copy(cNormalRoof).lerp(cSnowRoof, snowCover * 0.85);
+      canopyMat.color.setHex(0x3b5332).lerp(cSnowTerrain, snowCover * 0.45);
+
       lampGlowMat.emissiveIntensity = 0.35 + nightFactor * 2.2;
       archedWinMat.emissiveIntensity = nightFactor * 0.75;
       const poolIntensity = nightFactor * 14.0;

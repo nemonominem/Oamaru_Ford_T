@@ -7,7 +7,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ControlDock } from './components/ControlDock';
 import { OamaruViewport } from './components/OamaruViewport';
 import { ModelTAudioEngine } from './sim/audio';
-import { createInitialVehicleState, triggerHandCrank } from './sim/physics';
+import { computeAmbientTempC, getSeasonClimateInfo, pickLikelyWeather } from './sim/climate';
+import { ActiveErrandState, OAMARU_ERRANDS, loadTrialRecords } from './sim/errands';
+import { createInitialVehicleState, toggleIgnition, triggerHandCrank } from './sim/physics';
 import { getTerrainSample } from './sim/terrain';
 import {
   CameraMode,
@@ -19,6 +21,31 @@ import {
   VehicleState,
   WeatherType,
 } from './sim/types';
+
+function buildInitialEnv(): EnvironmentState {
+  const dayOfYear = 45; // 14 Feb (Oamaru Summer)
+  const timeHour = 14.0;
+  const info = getSeasonClimateInfo(dayOfYear);
+  const weather = pickLikelyWeather(dayOfYear, timeHour, 0);
+  const temperatureC = computeAmbientTempC(dayOfYear, timeHour, weather);
+
+  return {
+    weather,
+    autoWeather: true,
+    dayOfYear,
+    seasonName: info.seasonName,
+    dateLabel: info.dateLabel,
+    temperatureC,
+    sunriseHour: info.sunriseHour,
+    sunsetHour: info.sunsetHour,
+    timePreset: 'day',
+    timeHour,
+    windMps: weather === 'windy' ? 14.8 : weather === 'rainy' ? 7.8 : 1.8,
+    wetness: weather === 'rainy' ? 1.0 : 0,
+    snowCover: weather === 'snowy' ? 1.0 : 0,
+    visibilityMeters: weather === 'snowy' ? 85 : weather === 'rainy' ? 110 : 300,
+  };
+}
 
 export default function App() {
   const vehicleStateRef = useRef<VehicleState>(createInitialVehicleState());
@@ -36,19 +63,14 @@ export default function App() {
     handbrakePos: 0.5,
   });
 
-  const envRef = useRef<EnvironmentState>({
-    weather: 'sun',
-    timePreset: 'day',
-    timeHour: 14.0,
-    windMps: 1.5,
-    wetness: 0,
-    visibilityMeters: 280,
-  });
+  const envRef = useRef<EnvironmentState>(buildInitialEnv());
 
   const cameraModeRef = useRef<CameraMode>('cockpit');
   const controlModeRef = useRef<ControlMode>('standard');
   const headlightsManualRef = useRef<boolean | null>(null);
+  const wiperOnRef = useRef<boolean>(false);
   const audioRef = useRef<ModelTAudioEngine>(new ModelTAudioEngine());
+  const hornTriggerRef = useRef<number>(0);
 
   const [telemetry, setTelemetry] = useState<VehicleState>(() => ({
     ...vehicleStateRef.current,
@@ -59,6 +81,17 @@ export default function App() {
   const [controlMode, setControlMode] = useState<ControlMode>('standard');
   const [muted, setMuted] = useState<boolean>(false);
   const [headlightsOn, setHeadlightsOn] = useState<boolean>(false);
+  const [wiperOn, setWiperOn] = useState<boolean>(false);
+
+  const [errandState, setErrandState] = useState<ActiveErrandState>(() => ({
+    errandIndex: 0,
+    phase: 'idle',
+    completedCount: loadTrialRecords().errandsCompleted,
+    cleanStreak: 0,
+    statusMessage: null,
+  }));
+  const errandStateRef = useRef<ActiveErrandState>(errandState);
+  errandStateRef.current = errandState;
 
   const pressedKeysRef = useRef<Set<string>>(new Set());
 
@@ -112,31 +145,102 @@ export default function App() {
     v.gear = 'N';
   }, []);
 
+  const applySeasonWeatherForDateTime = useCallback((dayOfYear: number, timeHour: number, forcePick: boolean) => {
+    const env = envRef.current;
+    const info = getSeasonClimateInfo(dayOfYear);
+    env.dayOfYear = dayOfYear;
+    env.seasonName = info.seasonName;
+    env.dateLabel = info.dateLabel;
+    env.sunriseHour = info.sunriseHour;
+    env.sunsetHour = info.sunsetHour;
+    env.timeHour = timeHour;
+
+    if (env.autoWeather || forcePick) {
+      env.weather = pickLikelyWeather(dayOfYear, timeHour, 0);
+    }
+    env.temperatureC = computeAmbientTempC(dayOfYear, timeHour, env.weather);
+    setEnvState({ ...env });
+  }, []);
+
   const handleWeatherChange = useCallback((weather: WeatherType) => {
     audioRef.current.init();
     envRef.current.weather = weather;
+    envRef.current.autoWeather = false;
+    envRef.current.temperatureC = computeAmbientTempC(
+      envRef.current.dayOfYear,
+      envRef.current.timeHour,
+      weather
+    );
     setEnvState({ ...envRef.current });
   }, []);
 
-  const handleTimePresetChange = useCallback((preset: TimeOfDayPreset) => {
+  const handleAutoWeatherToggle = useCallback(() => {
     audioRef.current.init();
-    envRef.current.timePreset = preset;
-    if (preset === 'day') envRef.current.timeHour = 14.0;
-    else if (preset === 'dusk') envRef.current.timeHour = 18.6;
-    else if (preset === 'night') envRef.current.timeHour = 22.5;
-    // Clear manual override so dusk/night auto-lamps behave naturally unless user toggles L
-    headlightsManualRef.current = null;
-    const isDark = envRef.current.timeHour >= 18.2 || envRef.current.timeHour <= 6.2;
-    setHeadlightsOn(isDark || envRef.current.weather === 'fog');
-    setEnvState({ ...envRef.current });
+    const env = envRef.current;
+    env.autoWeather = !env.autoWeather;
+    if (env.autoWeather) {
+      env.weather = pickLikelyWeather(env.dayOfYear, env.timeHour, 0);
+      env.temperatureC = computeAmbientTempC(env.dayOfYear, env.timeHour, env.weather);
+    }
+    setEnvState({ ...env });
   }, []);
+
+  const handleDayOfYearChange = useCallback(
+    (dayOfYear: number) => {
+      audioRef.current.init();
+      applySeasonWeatherForDateTime(dayOfYear, envRef.current.timeHour, envRef.current.autoWeather);
+    },
+    [applySeasonWeatherForDateTime]
+  );
+
+  const handleTimeHourChange = useCallback(
+    (hour: number) => {
+      audioRef.current.init();
+      const env = envRef.current;
+      env.timePreset = 'day';
+      if (hour >= env.sunsetHour - 0.8 && hour <= env.sunsetHour + 0.8) env.timePreset = 'dusk';
+      else if (hour > env.sunsetHour + 0.8 || hour < env.sunriseHour - 0.5) env.timePreset = 'night';
+
+      applySeasonWeatherForDateTime(env.dayOfYear, hour, env.autoWeather);
+      headlightsManualRef.current = null;
+    },
+    [applySeasonWeatherForDateTime]
+  );
+
+  const handleTimePresetChange = useCallback(
+    (preset: TimeOfDayPreset) => {
+      audioRef.current.init();
+      const env = envRef.current;
+      env.timePreset = preset;
+      let targetHour = env.timeHour;
+      if (preset === 'day') targetHour = 13.5;
+      else if (preset === 'dusk') targetHour = Math.round((env.sunsetHour - 0.15) * 4) / 4;
+      else if (preset === 'night') targetHour = 22.5;
+
+      applySeasonWeatherForDateTime(env.dayOfYear, targetHour, env.autoWeather);
+      headlightsManualRef.current = null;
+      const isDark = targetHour >= env.sunsetHour - 0.2 || targetHour <= env.sunriseHour;
+      setHeadlightsOn(isDark || env.weather === 'rainy' || env.weather === 'snowy');
+    },
+    [applySeasonWeatherForDateTime]
+  );
 
   const handleCrankEngine = useCallback(() => {
     audioRef.current.init();
-    triggerHandCrank(vehicleStateRef.current);
+    triggerHandCrank(vehicleStateRef.current, controlModeRef.current, controlsRef.current.sparkAdvance);
+  }, []);
+
+  const handleToggleIgnition = useCallback(() => {
+    audioRef.current.init();
+    toggleIgnition(vehicleStateRef.current, controlModeRef.current, controlsRef.current.sparkAdvance);
+    setTelemetry({
+      ...vehicleStateRef.current,
+      wheels: [...vehicleStateRef.current.wheels] as VehicleState['wheels'],
+    });
   }, []);
 
   const handleHorn = useCallback(() => {
+    hornTriggerRef.current += 1;
     audioRef.current.playHorn();
   }, []);
 
@@ -157,6 +261,35 @@ export default function App() {
     });
   }, []);
 
+  const handleToggleWiper = useCallback(() => {
+    setWiperOn((prev) => {
+      const next = !prev;
+      wiperOnRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const handleStartOrAdvanceErrand = useCallback(() => {
+    audioRef.current.init();
+    setErrandState((prev) => {
+      const nextIdx = prev.phase === 'idle' ? prev.errandIndex : (prev.errandIndex + 1) % OAMARU_ERRANDS.length;
+      return {
+        ...prev,
+        errandIndex: nextIdx,
+        phase: 'to-pickup',
+        statusMessage: null,
+      };
+    });
+  }, []);
+
+  const handleCancelErrand = useCallback(() => {
+    setErrandState((prev) => ({
+      ...prev,
+      phase: 'idle',
+      statusMessage: null,
+    }));
+  }, []);
+
   const handleCameraChange = useCallback((mode: CameraMode) => {
     cameraModeRef.current = mode;
     setCameraMode(mode);
@@ -175,7 +308,11 @@ export default function App() {
     setTelemetry(snapshot);
     setEnvState(envSnap);
     if (headlightsManualRef.current === null) {
-      const autoOn = envSnap.timeHour >= 18.2 || envSnap.timeHour <= 6.2 || envSnap.weather === 'fog';
+      const autoOn =
+        envSnap.timeHour >= envSnap.sunsetHour - 0.2 ||
+        envSnap.timeHour <= envSnap.sunriseHour ||
+        envSnap.weather === 'rainy' ||
+        envSnap.weather === 'snowy';
       setHeadlightsOn(autoOn);
     }
   }, []);
@@ -194,10 +331,15 @@ export default function App() {
       }
 
       if (!e.repeat) {
-        if (e.code === 'KeyH') audioRef.current.playHorn();
+        if (e.code === 'KeyH') {
+          hornTriggerRef.current += 1;
+          audioRef.current.playHorn();
+        } else if (e.code === 'KeyI') handleToggleIgnition();
         else if (e.code === 'KeyR') handleResetVehicle();
-        else if (e.code === 'KeyC') triggerHandCrank(vehicleStateRef.current);
-        else if (e.code === 'KeyL') handleToggleHeadlights();
+        else if (e.code === 'KeyC') {
+          triggerHandCrank(vehicleStateRef.current, controlModeRef.current, controlsRef.current.sparkAdvance);
+        } else if (e.code === 'KeyL') handleToggleHeadlights();
+        else if (e.code === 'KeyV') handleToggleWiper();
         else if (e.code === 'Digit1') handleCameraChange('cockpit');
         else if (e.code === 'Digit2') handleCameraChange('chase');
         else if (e.code === 'Digit3') handleCameraChange('bonnet');
@@ -240,7 +382,14 @@ export default function App() {
       window.removeEventListener('blur', onBlur);
       audioRef.current.dispose();
     };
-  }, [handleCameraChange, handleResetVehicle, handleToggleHeadlights, syncKeysToControls]);
+  }, [
+    handleCameraChange,
+    handleResetVehicle,
+    handleToggleHeadlights,
+    handleToggleIgnition,
+    handleToggleWiper,
+    syncKeysToControls,
+  ]);
 
   return (
     <main className="relative h-screen w-screen overflow-hidden bg-[#141311]">
@@ -251,7 +400,12 @@ export default function App() {
         cameraModeRef={cameraModeRef}
         controlModeRef={controlModeRef}
         headlightsManualRef={headlightsManualRef}
+        wiperOnRef={wiperOnRef}
         audioRef={audioRef}
+        hornTriggerRef={hornTriggerRef}
+        errandState={errandState}
+        errandStateRef={errandStateRef}
+        onErrandUpdate={setErrandState}
         onTelemetryTick={handleTelemetryTick}
       />
 
@@ -262,12 +416,21 @@ export default function App() {
         controlMode={controlMode}
         muted={muted}
         headlightsOn={headlightsOn}
+        wiperOn={wiperOn}
+        errandState={errandState}
         onCameraChange={handleCameraChange}
         onControlModeChange={handleControlModeChange}
         onWeatherChange={handleWeatherChange}
+        onAutoWeatherToggle={handleAutoWeatherToggle}
+        onDayOfYearChange={handleDayOfYearChange}
+        onTimeHourChange={handleTimeHourChange}
         onTimePresetChange={handleTimePresetChange}
         onToggleMute={handleToggleMute}
         onToggleHeadlights={handleToggleHeadlights}
+        onToggleWiper={handleToggleWiper}
+        onStartOrAdvanceErrand={handleStartOrAdvanceErrand}
+        onCancelErrand={handleCancelErrand}
+        onToggleIgnition={handleToggleIgnition}
         onResetVehicle={handleResetVehicle}
         onJumpToBuilding={handleJumpToBuilding}
         onCrankEngine={handleCrankEngine}

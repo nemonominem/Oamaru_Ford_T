@@ -1,4 +1,5 @@
-import { OAMARU_LANDMARKS, WORLD_COLLIDERS, getTerrainSample } from './terrain';
+import { loadTrialRecords, saveTrialRecords } from './errands';
+import { CIRCUIT_CHECKPOINTS, OAMARU_LANDMARKS, WORLD_COLLIDERS, getTerrainSample } from './terrain';
 import {
   ControlMode,
   EnvironmentState,
@@ -37,37 +38,59 @@ export function getWeatherGripMultiplier(
   surface: SurfaceType,
   env: EnvironmentState
 ): { gripMult: number; rollMult: number } {
-  // Night dew/dampness factor between 20:00 and 06:30
-  const isNightDew = env.timeHour >= 20 || env.timeHour <= 6.5;
-  const dewFactor = isNightDew ? 0.93 : 1.0;
+  const isColdNight =
+    env.temperatureC <= 2.5 || env.timeHour >= env.sunsetHour + 1.5 || env.timeHour <= env.sunriseHour;
+  const frostDewFactor = env.temperatureC <= 1.5 ? 0.88 : isColdNight ? 0.94 : 1.0;
 
-  if (env.weather === 'rain') {
-    switch (surface) {
-      case 'cobbles':
-        return { gripMult: 0.70 * dewFactor, rollMult: 1.12 };
-      case 'wharf':
-        return { gripMult: 0.74 * dewFactor, rollMult: 1.1 };
-      case 'mud':
-        return { gripMult: 0.66 * dewFactor, rollMult: 1.38 };
-      case 'grass':
-        return { gripMult: 0.72 * dewFactor, rollMult: 1.25 };
-      default:
-        return { gripMult: 0.83 * dewFactor, rollMult: 1.15 };
-    }
+  let baseMoodMult = 1.0;
+  if (env.weather === 'cloudy') baseMoodMult = 0.97;
+  else if (env.weather === 'windy') baseMoodMult = 0.99;
+
+  let wetGripDrop = 0.17;
+  let wetRollAdd = 0.15;
+  let snowGripDrop = 0.38;
+  let snowRollAdd = 0.28;
+
+  switch (surface) {
+    case 'cobbles':
+      wetGripDrop = 0.30;
+      wetRollAdd = 0.12;
+      snowGripDrop = 0.44;
+      snowRollAdd = 0.24;
+      break;
+    case 'wharf':
+      wetGripDrop = 0.26;
+      wetRollAdd = 0.10;
+      snowGripDrop = 0.40;
+      snowRollAdd = 0.22;
+      break;
+    case 'mud':
+      wetGripDrop = 0.34;
+      wetRollAdd = 0.38;
+      snowGripDrop = 0.36;
+      snowRollAdd = 0.36;
+      break;
+    case 'grass':
+      wetGripDrop = 0.28;
+      wetRollAdd = 0.25;
+      snowGripDrop = 0.35;
+      snowRollAdd = 0.35;
+      break;
+    default:
+      wetGripDrop = 0.17;
+      wetRollAdd = 0.15;
+      snowGripDrop = 0.36;
+      snowRollAdd = 0.26;
+      break;
   }
 
-  if (env.weather === 'fog') {
-    switch (surface) {
-      case 'cobbles':
-        return { gripMult: 0.86 * dewFactor, rollMult: 1.05 };
-      case 'wharf':
-        return { gripMult: 0.88 * dewFactor, rollMult: 1.04 };
-      default:
-        return { gripMult: 0.92 * dewFactor, rollMult: 1.04 };
-    }
-  }
+  const wetFactor = 1.0 - wetGripDrop * clamp(env.wetness, 0, 1);
+  const snowFactor = 1.0 - snowGripDrop * clamp(env.snowCover, 0, 1);
 
-  return { gripMult: dewFactor, rollMult: 1.0 };
+  const gripMult = Math.max(0.36, baseMoodMult * wetFactor * snowFactor * frostDewFactor);
+  const rollMult = 1.0 + wetRollAdd * clamp(env.wetness, 0, 1) + snowRollAdd * clamp(env.snowCover, 0, 1);
+
+  return { gripMult, rollMult };
 }
 
 function engineTorqueNm(rpm: number, throttle: number, sparkAdvance: number): {
@@ -100,6 +123,7 @@ export function createInitialVehicleState(): VehicleState {
   const startX = -56;
   const startZ = 0;
   const startTerrain = getTerrainSample(startX, startZ);
+  const records = loadTrialRecords();
 
   return {
     x: startX,
@@ -115,11 +139,18 @@ export function createInitialVehicleState(): VehicleState {
     speedMps: 0,
     speedMph: 0,
     forwardSpeedMps: 0,
+    ignitionOn: true,
     engineRunning: true,
     crankingProgress: 0,
+    crankKickbackWarning: false,
     rpm: 520,
+    engineTempC: 76,
+    isOverheating: false,
+    backfireTrigger: 0,
     stallWarning: false,
     knocking: false,
+    impactStrength: 0,
+    mudAccumulation: 0,
     gear: 'N',
     clutchEngagement: 0,
     handThrottle: 0.14,
@@ -131,6 +162,13 @@ export function createInitialVehicleState(): VehicleState {
     slopePercent: 0,
     nearestLandmark: OAMARU_LANDMARKS[1],
     distanceDrivenMiles: 0,
+    lapCount: 1,
+    nextSector: 1,
+    currentLapSec: 0,
+    lastLapSec: null,
+    bestLapSec: records.bestLapSec,
+    courtesyScore: 100,
+    racePosition: 1,
     wheels: [
       { compression: 0.4, slipRatio: 0, grounded: true, surface: 'macadam', steerAngle: 0, spinAngle: 0 },
       { compression: 0.4, slipRatio: 0, grounded: true, surface: 'macadam', steerAngle: 0, spinAngle: 0 },
@@ -160,13 +198,19 @@ export function stepVehiclePhysics(
   state.speedMps = Math.hypot(state.vx, state.vz);
   state.speedMph = state.speedMps * 2.23694;
 
-  // 1. Hand-cranking sequence if stalled
-  if (!state.engineRunning && state.crankingProgress > 0) {
-    // Slightly slower cranking catch on cold night air
-    const coldRate = env.timeHour >= 20 || env.timeHour <= 6 ? 1.1 : 1.35;
+  // 1. Ignition & Hand-cranking sequence
+  state.impactStrength = Math.max(0, state.impactStrength - dt * 2.5);
+
+  if (!state.ignitionOn) {
+    state.engineRunning = false;
+    state.crankingProgress = 0;
+    state.crankKickbackWarning = false;
+  } else if (!state.engineRunning && state.crankingProgress > 0) {
+    const coldRate = env.temperatureC < 4 || env.timeHour >= 20 || env.timeHour <= 6 ? 1.05 : 1.35;
     state.crankingProgress += dt * coldRate;
     if (state.crankingProgress >= 1) {
       state.crankingProgress = 0;
+      state.crankKickbackWarning = false;
       state.engineRunning = true;
       state.rpm = 540;
       state.stallWarning = false;
@@ -226,6 +270,11 @@ export function stepVehiclePhysics(
     else desiredGear = 'N';
   }
 
+  const prevThrottle = state.handThrottle;
+  if (state.engineRunning && prevThrottle >= 0.56 && activeThrottle < 0.25 && state.rpm > 1220) {
+    state.backfireTrigger += 1;
+  }
+
   state.handThrottle = activeThrottle;
   state.sparkAdvance = activeSpark;
   state.gear = desiredGear;
@@ -233,7 +282,7 @@ export function stepVehiclePhysics(
   const targetClutch = desiredGear === 'N' ? 0 : 1;
   state.clutchEngagement = approach(state.clutchEngagement, targetClutch, 5.5, dt);
 
-  // 3. Engine RPM & Drive Force
+  // 3. Engine RPM, Thermosyphon Cooling & Drive Force
   let gearRatio = 0;
   if (desiredGear === 'LOW') gearRatio = 2.75 * DIFF_RATIO;
   else if (desiredGear === 'HIGH') gearRatio = 1.0 * DIFF_RATIO;
@@ -247,6 +296,8 @@ export function stepVehiclePhysics(
     const { torque, knocking } = engineTorqueNm(state.rpm, activeThrottle, activeSpark);
     state.knocking = knocking;
 
+    const overheatDerate = state.isOverheating ? 0.82 : 1.0;
+
     if (desiredGear === 'N' || state.clutchEngagement < 0.15) {
       state.rpm = approach(state.rpm, targetIdleRpm, 1800, dt);
     } else {
@@ -256,7 +307,8 @@ export function stepVehiclePhysics(
       state.rpm = approach(state.rpm, clamp(blendedRpm, 180, 2100), 1400, dt);
 
       const clutchSlipFactor = clamp(1.0 + (targetIdleRpm - coupledRpm) * 0.0004, 0.35, 1.35);
-      const wheelTorque = torque * gearRatio * 0.86 * state.clutchEngagement * clutchSlipFactor;
+      const wheelTorque =
+        torque * overheatDerate * gearRatio * 0.86 * state.clutchEngagement * clutchSlipFactor;
       driveForce = wheelTorque / WHEEL_RADIUS;
     }
 
@@ -271,12 +323,24 @@ export function stepVehiclePhysics(
     } else {
       state.stallWarning = state.rpm > 0 && state.rpm < 320;
     }
+
+    // Thermosyphon cooling: lugging in HIGH uphill or holding heavy throttle heats coolant
+    const climbLoad = Math.max(0, state.slopePercent) * 0.85;
+    const luggingHeat = desiredGear === 'HIGH' && state.speedMph < 13 && activeThrottle > 0.4 ? 11.5 : 0;
+    const rpmLoad = (state.rpm / 2000) * 14 + activeThrottle * 9;
+    const airflowCool = state.speedMps * 1.1 + (desiredGear === 'LOW' ? 2.5 : 0) + (env.weather === 'rainy' ? 3.5 : 0);
+    const targetTemp = clamp(env.temperatureC + 64 + rpmLoad + climbLoad + luggingHeat - airflowCool, 58, 108);
+    state.engineTempC = approach(state.engineTempC, targetTemp, targetTemp > state.engineTempC ? 1.45 : 0.85, dt);
+    state.isOverheating = state.engineTempC >= 100.5;
   } else {
-    state.rpm = 0;
+    state.rpm = approach(state.rpm, 0, 1400, dt);
     state.knocking = false;
+    state.stallWarning = false;
+    state.engineTempC = approach(state.engineTempC, Math.max(env.temperatureC + 10, 24), 0.55, dt);
+    state.isOverheating = state.engineTempC >= 100.5;
   }
 
-  // 4. Sample Terrain at 4 Wheel Corners with Weather & Night Dew Impact
+  // 4. Sample Terrain at 4 Wheel Corners with Seasonal Weather & Temperature Traction
   let avgTerrainH = 0;
   let avgGrip = 0;
   let avgRollRes = 0;
@@ -300,7 +364,7 @@ export function stepVehiclePhysics(
     avgTerrainH += h;
     avgGrip += sample.grip * gripMult;
     avgRollRes += sample.rollingResistance * rollMult;
-    avgRutPull += sample.rutPull * (env.weather === 'rain' ? 1.35 : 1.0);
+    avgRutPull += sample.rutPull * (1.0 + env.wetness * 0.35 + env.snowCover * 0.28);
 
     const compression = clamp(0.45 + (h - state.y) * 2.4, 0.08, 0.92);
     state.wheels[i].compression = compression;
@@ -330,7 +394,7 @@ export function stepVehiclePhysics(
   state.wheels[0].steerAngle = state.steerAngle;
   state.wheels[1].steerAngle = state.steerAngle * 0.94;
 
-  // 6. Longitudinal Forces & Coastal Wind Drag
+  // 6. Longitudinal Forces & Seasonal Coastal Wind Gusts
   const maxTractionForce = MASS_KG * GRAVITY * 0.54 * avgGrip;
   const clampedDrive = clamp(driveForce, -maxTractionForce, maxTractionForce);
 
@@ -340,14 +404,16 @@ export function stepVehiclePhysics(
     totalBrakeForce = -Math.sign(forwardVel) * brakeDecelForce;
   }
 
-  const airDensity = env.weather === 'fog' || env.timeHour >= 20 ? 1.27 : 1.225;
+  const airDensity = clamp(1.293 - env.temperatureC * 0.004, 1.18, 1.32);
   const aeroDrag = -0.5 * airDensity * 1.95 * 0.85 * forwardVel * Math.abs(forwardVel);
   const rollingDrag = Math.abs(forwardVel) > 0.03 ? -Math.sign(forwardVel) * MASS_KG * GRAVITY * avgRollRes : 0;
 
-  // Sea wind force in rain blowing inland (-X)
-  const windX = env.weather === 'rain' ? -env.windMps * 14 : 0;
-  const windFwd = windX * fwdX;
-  const windLat = windX * leftX;
+  // Sea wind force blowing inland (-X), stronger during 'windy' & 'rainy'
+  const activeWind = env.windMps > 2.5 ? env.windMps : 0;
+  const windX = -activeWind * 14.5;
+  const windZ = Math.sin(state.x * 0.05 + state.z * 0.04) * activeWind * 3.5;
+  const windFwd = windX * fwdX + windZ * fwdZ;
+  const windLat = windX * leftX + windZ * leftZ;
 
   const netLongitudinal = clampedDrive + totalBrakeForce + aeroDrag + rollingDrag + gravitySlopeForce + windFwd;
   let newForwardVel = forwardVel + (netLongitudinal / MASS_KG) * dt;
@@ -359,7 +425,7 @@ export function stepVehiclePhysics(
     newForwardVel = 0;
   }
 
-  // 7. Lateral Cornering & Wet/Mud Drift Dynamics
+  // 7. Lateral Cornering & Wet/Snow Drift Dynamics
   const corneringStiffness = 5.4 * avgGrip;
   const desiredYawRate =
     Math.abs(newForwardVel) > 0.15
@@ -419,6 +485,9 @@ export function stepVehiclePhysics(
       state.z += nz * pen;
       const vn = state.vx * nx + state.vz * nz;
       if (vn < 0) {
+        if (vn < -1.1) {
+          state.impactStrength = Math.max(state.impactStrength, clamp(Math.abs(vn) / 6, 0.2, 1.0));
+        }
         state.vx -= 1.3 * vn * nx;
         state.vz -= 1.3 * vn * nz;
       }
@@ -426,6 +495,22 @@ export function stepVehiclePhysics(
   }
 
   state.distanceDrivenMiles += Math.hypot(state.x - prevX, state.z - prevZ) * 0.000621371;
+
+  // Mud & dust accumulation on fenders/running boards
+  if (state.speedMps > 1.0 && (state.currentSurface === 'mud' || state.currentSurface === 'grass')) {
+    state.mudAccumulation = clamp(
+      state.mudAccumulation + dt * (state.currentSurface === 'mud' ? 0.15 : 0.05) * clamp(state.speedMps / 4, 0.3, 1.4),
+      0,
+      1
+    );
+  } else if (env.weather === 'rainy') {
+    state.mudAccumulation = clamp(state.mudAccumulation - dt * 0.08, 0, 1);
+  }
+
+  // Courtesy recovers very gradually during calm, safe street driving
+  if (state.speedMph > 1 && state.speedMph < 19 && state.currentSurface !== 'grass' && state.impactStrength < 0.05) {
+    state.courtesyScore = clamp(state.courtesyScore + dt * 0.35, 0, 100);
+  }
 
   // 9. Suspension Heave, Pitch & Roll
   const targetY = avgTerrainH;
@@ -466,6 +551,30 @@ export function stepVehiclePhysics(
   }
   state.nearestLandmark = bestDist <= closest.radius + 14 ? closest : null;
 
+  // 11. Circuit Lap & Sector Timing
+  if (state.speedMps > 0.25 || state.currentLapSec > 0) {
+    state.currentLapSec += dt;
+  }
+  const cp = CIRCUIT_CHECKPOINTS[state.nextSector];
+  if (cp && Math.hypot(state.x - cp.x, state.z - cp.z) <= cp.radius) {
+    if (state.nextSector === 0) {
+      state.lastLapSec = state.currentLapSec;
+      state.bestLapSec =
+        state.bestLapSec === null ? state.currentLapSec : Math.min(state.bestLapSec, state.currentLapSec);
+      const prevRec = loadTrialRecords();
+      saveTrialRecords({
+        bestLapSec: state.bestLapSec,
+        bestCourtesy: Math.max(prevRec.bestCourtesy, Math.round(state.courtesyScore)),
+        errandsCompleted: prevRec.errandsCompleted,
+      });
+      state.lapCount += 1;
+      state.currentLapSec = 0;
+      state.nextSector = 1;
+    } else {
+      state.nextSector = (state.nextSector + 1) % CIRCUIT_CHECKPOINTS.length;
+    }
+  }
+
   for (let i = 0; i < 4; i++) {
     if (state.wheels[i].spinAngle > Math.PI * 200) {
       state.wheels[i].spinAngle -= Math.PI * 200;
@@ -473,8 +582,46 @@ export function stepVehiclePhysics(
   }
 }
 
-export function triggerHandCrank(state: VehicleState): void {
+export function triggerHandCrank(
+  state: VehicleState,
+  mode: ControlMode = 'standard',
+  sparkAdvance = 0.38
+): void {
+  state.ignitionOn = true;
+  if (mode === 'authentic' && sparkAdvance > 0.68) {
+    state.crankKickbackWarning = true;
+    state.crankingProgress = 0;
+    return;
+  }
+  state.crankKickbackWarning = false;
   if (!state.engineRunning && state.crankingProgress === 0) {
     state.crankingProgress = 0.01;
+  }
+}
+
+export function toggleIgnition(
+  state: VehicleState,
+  mode: ControlMode = 'standard',
+  sparkAdvance = 0.38
+): boolean {
+  if (state.ignitionOn) {
+    state.ignitionOn = false;
+    state.engineRunning = false;
+    state.crankingProgress = 0;
+    state.crankKickbackWarning = false;
+    state.stallWarning = false;
+    state.knocking = false;
+    return false;
+  } else {
+    state.ignitionOn = true;
+    if (mode === 'authentic' && sparkAdvance > 0.68) {
+      state.crankKickbackWarning = true;
+      return true;
+    }
+    state.crankKickbackWarning = false;
+    if (!state.engineRunning && state.crankingProgress === 0) {
+      state.crankingProgress = 0.01;
+    }
+    return true;
   }
 }
