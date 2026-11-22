@@ -1,0 +1,6 @@
+{
+  "name": "Oamaru 1914 — Ford Model T Simulation",
+  "description": "Realistic 3D Ford Model T driving simulation with planetary transmission physics and period-accurate Victorian Oamaru road terrain.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
