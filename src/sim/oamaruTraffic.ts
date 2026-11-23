@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import {
   CIRCUIT_LOOP_POINTS,
+  ROAD_OBSTRUCTIONS,
   SIDE_STREET_BLOCKADES,
   WORLD_COLLIDERS,
   getTerrainHeightAndSurface,
@@ -39,7 +40,10 @@ export interface SpatialTrafficAudioHints {
   horseProximity: number;
   horsePan: number;
   horseStartleIntensity: number;
+  drayProximity: number;
+  drayPan: number;
   otherCarProximity: number;
+  otherCarPan: number;
   harbourProximity: number;
   harbourPan: number;
   dogBarkIntensity: number;
@@ -49,6 +53,11 @@ export interface SpatialTrafficAudioHints {
   sheepPan: number;
   trainProximity: number;
   trainPan: number;
+  piperProximity: number;
+  piperPan: number;
+  piperPanicLevel: number;
+  piperDown: boolean;
+  piperJustHit: boolean;
 }
 
 interface IdleSpectator {
@@ -174,6 +183,7 @@ export interface OamaruTrafficHandle {
   ) => void;
   getObstacles: () => DynamicObstacle[];
   getRivalMapPoints: () => { x: number; z: number }[];
+  getPiperMapPoint: () => { x: number; z: number; down: boolean };
   getRacePosition: (px: number, pz: number, playerLap: number) => number;
   getSpatialAudioHints: (
     px: number,
@@ -1408,6 +1418,176 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
     });
   }
 
+  // ---------------------------------------------------------------------------
+  // 6. Scottish Bagpiper ("Angus MacLeod") — Strolls, Flees Fast, Still Hittable
+  // ---------------------------------------------------------------------------
+  const tartanCanvas = document.createElement('canvas');
+  tartanCanvas.width = 64;
+  tartanCanvas.height = 64;
+  const tCtx = tartanCanvas.getContext('2d')!;
+  tCtx.fillStyle = '#8b1e24';
+  tCtx.fillRect(0, 0, 64, 64);
+  tCtx.fillStyle = '#194a30';
+  tCtx.fillRect(0, 12, 64, 18);
+  tCtx.fillRect(12, 0, 18, 64);
+  tCtx.fillStyle = '#182442';
+  tCtx.fillRect(0, 42, 64, 10);
+  tCtx.fillRect(42, 0, 10, 64);
+  tCtx.fillStyle = '#e5be4b';
+  tCtx.fillRect(0, 20, 64, 2);
+  tCtx.fillRect(20, 0, 2, 64);
+  tCtx.fillStyle = '#f2ede2';
+  tCtx.fillRect(0, 56, 64, 2);
+  tCtx.fillRect(56, 0, 2, 64);
+  const tartanTex = track(new THREE.CanvasTexture(tartanCanvas));
+  tartanTex.colorSpace = THREE.SRGBColorSpace;
+  tartanTex.wrapS = THREE.RepeatWrapping;
+  tartanTex.wrapT = THREE.RepeatWrapping;
+  tartanTex.repeat.set(2, 2);
+
+  const tartanMat = track(new THREE.MeshStandardMaterial({ map: tartanTex, roughness: 0.85 }));
+  const kiltJacketMat = track(new THREE.MeshStandardMaterial({ color: 0x1d2b24, roughness: 0.82 }));
+  const hoseCreamMat = track(new THREE.MeshStandardMaterial({ color: 0xebe4d2, roughness: 0.86 }));
+  const droneWoodMat = track(new THREE.MeshStandardMaterial({ color: 0x1d1410, roughness: 0.45 }));
+
+  const piperGroup = new THREE.Group();
+  const piperBodyPivot = new THREE.Group();
+  piperGroup.add(piperBodyPivot);
+
+  // Legs with bare knees, Highland cream hose, red flashes & dark brogues
+  const piperLegs: THREE.Group[] = [];
+  [-0.095, 0.095].forEach((lx) => {
+    const lPivot = new THREE.Group();
+    lPivot.position.set(lx, 0.72, 0);
+    const knee = new THREE.Mesh(track(new THREE.CylinderGeometry(0.068, 0.062, 0.24, 8)), skinMat);
+    knee.position.set(0, -0.14, 0);
+    const hose = new THREE.Mesh(track(new THREE.CylinderGeometry(0.064, 0.052, 0.36, 8)), hoseCreamMat);
+    hose.position.set(0, -0.44, 0);
+    hose.castShadow = true;
+    const flash = new THREE.Mesh(track(new THREE.BoxGeometry(0.03, 0.09, 0.025)), barrierRedMat);
+    flash.position.set(lx > 0 ? 0.06 : -0.06, -0.32, 0.02);
+    const brogue = new THREE.Mesh(bootGeo, leatherBootMat);
+    brogue.position.set(0, -0.66, 0.035);
+    lPivot.add(knee, hose, flash, brogue);
+    piperBodyPivot.add(lPivot);
+    piperLegs.push(lPivot);
+  });
+
+  // Tartan Kilt + Leather & Fur Sporran
+  const kilt = new THREE.Mesh(track(new THREE.CylinderGeometry(0.165, 0.275, 0.48, 14)), tartanMat);
+  kilt.position.set(0, 0.78, 0);
+  kilt.castShadow = true;
+  const sporran = new THREE.Mesh(track(new THREE.BoxGeometry(0.13, 0.17, 0.06)), hoseCreamMat);
+  sporran.position.set(0, 0.78, 0.22);
+  const sporranTop = new THREE.Mesh(track(new THREE.BoxGeometry(0.135, 0.045, 0.065)), leatherBootMat);
+  sporranTop.position.set(0, 0.87, 0.22);
+  piperBodyPivot.add(kilt, sporran, sporranTop);
+
+  // Argyll Jacket + Tartan Shoulder Plaid + Waist Belt
+  const piperTorso = new THREE.Mesh(track(new THREE.BoxGeometry(0.36, 0.48, 0.21)), kiltJacketMat);
+  piperTorso.position.set(0, 1.24, 0);
+  piperTorso.castShadow = true;
+  const piperBelt = new THREE.Mesh(track(new THREE.BoxGeometry(0.37, 0.06, 0.225)), leatherBootMat);
+  piperBelt.position.set(0, 1.01, 0);
+  const buckle = new THREE.Mesh(track(new THREE.BoxGeometry(0.08, 0.07, 0.03)), brassMat);
+  buckle.position.set(0, 1.01, 0.12);
+  const plaidSash = new THREE.Mesh(track(new THREE.BoxGeometry(0.14, 0.56, 0.23)), tartanMat);
+  plaidSash.position.set(-0.04, 1.24, 0);
+  plaidSash.rotation.z = 0.52;
+  piperBodyPivot.add(piperTorso, piperBelt, buckle, plaidSash);
+
+  // Head + Ginger Beard + Scottish Glengarry Bonnet
+  const piperHead = new THREE.Group();
+  piperHead.position.set(0, 1.54, 0);
+  const pNeck = new THREE.Mesh(neckGeo, skinMat);
+  pNeck.position.set(0, -0.06, 0);
+  const pSkull = new THREE.Mesh(headGeo, skinMat);
+  pSkull.position.set(0, 0.05, 0);
+  pSkull.castShadow = true;
+  const pNose = new THREE.Mesh(noseGeo, skinMat);
+  pNose.position.set(0, 0.04, 0.11);
+  const beardMat = track(new THREE.MeshStandardMaterial({ color: 0xa44b24, roughness: 0.88 }));
+  const pBeard = new THREE.Mesh(track(new THREE.BoxGeometry(0.13, 0.11, 0.09)), beardMat);
+  pBeard.position.set(0, -0.02, 0.085);
+  const bonnet = new THREE.Mesh(track(new THREE.BoxGeometry(0.13, 0.11, 0.27)), kiltJacketMat);
+  bonnet.position.set(0, 0.15, -0.01);
+  bonnet.rotation.z = -0.14;
+  const bonnetBand = new THREE.Mesh(track(new THREE.BoxGeometry(0.138, 0.035, 0.275)), tartanMat);
+  bonnetBand.position.set(0, 0.11, -0.01);
+  bonnetBand.rotation.z = -0.14;
+  const toorie = new THREE.Mesh(track(new THREE.SphereGeometry(0.028, 6, 6)), barrierRedMat);
+  toorie.position.set(0.02, 0.21, 0.02);
+  piperHead.add(pNeck, pSkull, pNose, pBeard, bonnet, bonnetBand, toorie);
+  piperBodyPivot.add(piperHead);
+
+  // Arms + Great Highland Bagpipes (tartan bag, blowpipe, chanter, 3 brass-ferruled drones)
+  const piperArms: THREE.Group[] = [];
+  [-0.22, 0.22].forEach((ax) => {
+    const aPivot = new THREE.Group();
+    aPivot.position.set(ax, 1.42, 0);
+    const sleeve = new THREE.Mesh(track(new THREE.CylinderGeometry(0.052, 0.042, 0.48, 8)), kiltJacketMat);
+    sleeve.position.set(0, -0.22, 0);
+    sleeve.castShadow = true;
+    const hand = new THREE.Mesh(handGeo, skinMat);
+    hand.position.set(0, -0.47, 0);
+    aPivot.add(sleeve, hand);
+    piperBodyPivot.add(aPivot);
+    piperArms.push(aPivot);
+  });
+  piperArms[0].rotation.set(-0.78, 0, 0.25);
+  piperArms[1].rotation.set(-0.85, 0, -0.35);
+
+  const pipesGroup = new THREE.Group();
+  pipesGroup.position.set(-0.14, 1.26, 0.18);
+  const airbag = new THREE.Mesh(track(new THREE.SphereGeometry(0.16, 10, 8)), tartanMat);
+  airbag.scale.set(0.85, 0.92, 1.38);
+  airbag.castShadow = true;
+  const chanter = new THREE.Mesh(track(new THREE.CylinderGeometry(0.016, 0.028, 0.42, 8)), droneWoodMat);
+  chanter.position.set(0.14, -0.12, 0.18);
+  chanter.rotation.x = 0.55;
+  const chanterRing = new THREE.Mesh(track(new THREE.CylinderGeometry(0.032, 0.032, 0.03, 8)), brassMat);
+  chanterRing.position.set(0.14, -0.27, 0.28);
+  chanterRing.rotation.x = 0.55;
+  const blowpipe = new THREE.Mesh(track(new THREE.CylinderGeometry(0.014, 0.014, 0.28, 6)), droneWoodMat);
+  blowpipe.position.set(0.09, 0.18, 0.05);
+  blowpipe.rotation.set(0.35, 0, -0.35);
+  pipesGroup.add(airbag, chanter, chanterRing, blowpipe);
+
+  const droneSpecs: [number, number, number, number][] = [
+    [-0.08, 0.38, -0.24, 0.72], // Bass drone
+    [-0.02, 0.30, -0.16, 0.52], // Tenor drone 1
+    [0.04, 0.30, -0.09, 0.52],  // Tenor drone 2
+  ];
+  droneSpecs.forEach(([dx, dy, dz, len]) => {
+    const drone = new THREE.Mesh(track(new THREE.CylinderGeometry(0.018, 0.015, len, 8)), droneWoodMat);
+    drone.position.set(dx, dy, dz);
+    drone.rotation.x = -0.58;
+    drone.rotation.z = 0.18;
+    const bell = new THREE.Mesh(track(new THREE.CylinderGeometry(0.034, 0.02, 0.08, 8)), brassMat);
+    bell.position.set(dx - 0.05, dy + Math.cos(0.58) * (len * 0.46), dz - Math.sin(0.58) * (len * 0.46));
+    bell.rotation.x = -0.58;
+    bell.rotation.z = 0.18;
+    pipesGroup.add(drone, bell);
+  });
+  piperBodyPivot.add(pipesGroup);
+
+  const piper = {
+    x: -10,
+    z: 4.2,
+    yaw: Math.PI / 2,
+    vx: 0,
+    vz: 0,
+    patrolDir: 1 as 1 | -1,
+    state: 'playing' as 'playing' | 'fleeing' | 'down',
+    panicTimer: 0,
+    downTimer: 0,
+    panicLevel: 0,
+    dodgeSeed: 1,
+    justHit: false,
+  };
+  piperGroup.position.set(piper.x, getTerrainHeightAndSurface(piper.x, piper.z).height, piper.z);
+  group.add(piperGroup);
+
   const shortestAngleDiff = (from: number, to: number): number => {
     let diff = ((to - from + Math.PI) % (Math.PI * 2)) - Math.PI;
     if (diff < -Math.PI) diff += Math.PI * 2;
@@ -1860,9 +2040,191 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
         sg.leftWing.rotation.z = flap;
         sg.rightWing.rotation.z = -flap;
       }
+
+      // Animate Scottish Bagpiper ("Angus MacLeod"): plays pipes, bolts fast on approach, still hittable
+      piper.justHit = false;
+      const distPiperCar = Math.hypot(pX - piper.x, pZ - piper.z);
+
+      if (piper.state === 'down') {
+        piper.downTimer -= dt;
+        piper.panicLevel = 0;
+        piperBodyPivot.rotation.x = THREE.MathUtils.damp(piperBodyPivot.rotation.x, -Math.PI * 0.47, 14, dt);
+        piperBodyPivot.rotation.z = THREE.MathUtils.damp(piperBodyPivot.rotation.z, 0.24, 14, dt);
+        piperBodyPivot.position.y = THREE.MathUtils.damp(piperBodyPivot.position.y, 0.18, 12, dt);
+
+        if (piper.downTimer <= 0) {
+          piper.state = 'fleeing';
+          piper.panicTimer = 2.4;
+          piper.dodgeSeed = -piper.dodgeSeed;
+          if (distPiperCar < 2.8) {
+            const awayA = Math.atan2(piper.x - pX, piper.z - pZ);
+            piper.x = pX + Math.sin(awayA) * 3.0;
+            piper.z = pZ + Math.cos(awayA) * 3.0;
+          }
+        }
+      } else {
+        // Recover upright posture cleanly
+        piperBodyPivot.rotation.x = THREE.MathUtils.damp(piperBodyPivot.rotation.x, piper.state === 'fleeing' ? 0.22 : 0, 12, dt);
+        piperBodyPivot.rotation.z = THREE.MathUtils.damp(piperBodyPivot.rotation.z, 0, 12, dt);
+        piperBodyPivot.position.y = THREE.MathUtils.damp(piperBodyPivot.position.y, 0, 12, dt);
+
+        // Check collision / run-over hit
+        if (distPiperCar < 1.58 && pSpeed > 1.8) {
+          piper.state = 'down';
+          piper.downTimer = 6.5;
+          piper.panicTimer = 0;
+          piper.panicLevel = 0;
+          piper.vx = 0;
+          piper.vz = 0;
+          piper.justHit = true;
+
+          const pushA = Math.atan2(piper.x - pX, piper.z - pZ);
+          piper.x = pX + Math.sin(pushA) * 1.75;
+          piper.z = pZ + Math.cos(pushA) * 1.75;
+          piper.yaw = pushA;
+        } else {
+          // Determine whether the Model T is trying to run him over or rushing near him
+          const toPiperX = (piper.x - pX) / (distPiperCar || 1);
+          const toPiperZ = (piper.z - pZ) / (distPiperCar || 1);
+          const carDirX = Math.sin(pYaw);
+          const carDirZ = Math.cos(pYaw);
+          const aimedAtPiper = toPiperX * carDirX + toPiperZ * carDirZ > 0.25;
+          const threatClose =
+            distPiperCar < 12.5 ||
+            (distPiperCar < 24 && pSpeed > 2.2 && aimedAtPiper) ||
+            (distPiperCar < 25 && hornFired);
+
+          if (threatClose) {
+            if (piper.state !== 'fleeing') {
+              piper.dodgeSeed = Math.random() < 0.5 ? 1 : -1;
+            }
+            piper.state = 'fleeing';
+            piper.panicTimer = Math.max(piper.panicTimer, 2.5);
+          } else if (piper.panicTimer > 0) {
+            piper.panicTimer = Math.max(0, piper.panicTimer - dt);
+            if (piper.panicTimer <= 0 && distPiperCar > 22) {
+              piper.state = 'playing';
+            }
+          }
+
+          if (piper.state === 'fleeing') {
+            const awayX = piper.x - pX;
+            const awayZ = piper.z - pZ;
+            const awayLen = Math.hypot(awayX, awayZ) || 1;
+            const perpX = -awayZ / awayLen;
+            const perpZ = awayX / awayLen;
+            // Dodge sideways slightly as car closes in while sprinting fast away
+            const dodgeWeight = distPiperCar < 10 ? 0.52 * piper.dodgeSeed : 0.18 * piper.dodgeSeed;
+            let desX = awayX / awayLen + perpX * dodgeWeight;
+            let desZ = awayZ / awayLen + perpZ * dodgeWeight;
+            const desLen = Math.hypot(desX, desZ) || 1;
+            desX /= desLen;
+            desZ /= desLen;
+
+            const fleeSpeed = distPiperCar < 11 ? 7.3 : 6.2;
+            piper.vx = THREE.MathUtils.damp(piper.vx, desX * fleeSpeed, 9.5, dt);
+            piper.vz = THREE.MathUtils.damp(piper.vz, desZ * fleeSpeed, 9.5, dt);
+            piper.panicLevel = Math.max(0.35, Math.min(1, 1.15 - distPiperCar / 26));
+          } else {
+            // Calm Harbour St patrol while playing bagpipes
+            if (piper.x > 34) piper.patrolDir = -1;
+            else if (piper.x < -34) piper.patrolDir = 1;
+            const targetZ = 4.2;
+            const dzHome = THREE.MathUtils.clamp((targetZ - piper.z) * 0.8, -0.9, 0.9);
+            piper.vx = THREE.MathUtils.damp(piper.vx, piper.patrolDir * 1.25, 4, dt);
+            piper.vz = THREE.MathUtils.damp(piper.vz, dzHome, 4, dt);
+            piper.panicLevel = THREE.MathUtils.damp(piper.panicLevel, 0, 5, dt);
+          }
+
+          let nextPx = THREE.MathUtils.clamp(piper.x + piper.vx * dt, -158, 102);
+          let nextPz = THREE.MathUtils.clamp(piper.z + piper.vz * dt, -74, 124);
+
+          // Keep bagpiper out of buildings, blockades & crates
+          for (let c = 0; c < WORLD_COLLIDERS.length; c++) {
+            const box = WORLD_COLLIDERS[c];
+            if (
+              nextPx > box.minX - 0.65 &&
+              nextPx < box.maxX + 0.65 &&
+              nextPz > box.minZ - 0.65 &&
+              nextPz < box.maxZ + 0.65
+            ) {
+              const dxMin = Math.abs(nextPx - (box.minX - 0.65));
+              const dxMax = Math.abs(box.maxX + 0.65 - nextPx);
+              const dzMin = Math.abs(nextPz - (box.minZ - 0.65));
+              const dzMax = Math.abs(box.maxZ + 0.65 - nextPz);
+              const m = Math.min(dxMin, dxMax, dzMin, dzMax);
+              if (m === dxMin) {
+                nextPx = box.minX - 0.65;
+                piper.vz += (piper.z >= (box.minZ + box.maxZ) * 0.5 ? 1 : -1) * 1.8;
+              } else if (m === dxMax) {
+                nextPx = box.maxX + 0.65;
+                piper.vz += (piper.z >= (box.minZ + box.maxZ) * 0.5 ? 1 : -1) * 1.8;
+              } else if (m === dzMin) {
+                nextPz = box.minZ - 0.65;
+                piper.vx += (piper.x >= (box.minX + box.maxX) * 0.5 ? 1 : -1) * 1.8;
+              } else {
+                nextPz = box.maxZ + 0.65;
+                piper.vx += (piper.x >= (box.minX + box.maxX) * 0.5 ? 1 : -1) * 1.8;
+              }
+            }
+          }
+          for (let o = 0; o < ROAD_OBSTRUCTIONS.length; o++) {
+            const obs = ROAD_OBSTRUCTIONS[o];
+            const odx = nextPx - obs.x;
+            const odz = nextPz - obs.z;
+            const minR = obs.radius + 0.45;
+            const dSq = odx * odx + odz * odz;
+            if (dSq < minR * minR) {
+              const d = Math.sqrt(dSq) || 0.01;
+              nextPx = obs.x + (odx / d) * minR;
+              nextPz = obs.z + (odz / d) * minR;
+            }
+          }
+
+          const moveMag = Math.hypot(nextPx - piper.x, nextPz - piper.z);
+          if (moveMag > 0.004) {
+            const moveYaw = Math.atan2(nextPx - piper.x, nextPz - piper.z);
+            piper.yaw += shortestAngleDiff(piper.yaw, moveYaw) * Math.min(1, dt * 12);
+          }
+          piper.x = nextPx;
+          piper.z = nextPz;
+
+          const pSpeedMag = Math.hypot(piper.vx, piper.vz);
+          const strideRate = piper.state === 'fleeing' ? 17.5 : 5.2;
+          const strideAmp = piper.state === 'fleeing' ? 0.88 : 0.36;
+          const stride = pSpeedMag > 0.2 ? Math.sin(elapsed * strideRate) * strideAmp : 0;
+          piperLegs[0].rotation.x = stride;
+          piperLegs[1].rotation.x = -stride;
+
+          if (piper.state === 'fleeing') {
+            pipesGroup.rotation.z = Math.sin(elapsed * 22) * 0.16;
+            pipesGroup.rotation.x = Math.cos(elapsed * 18) * 0.12;
+            piperHead.rotation.y = Math.sin(elapsed * 12) * 0.42;
+            piperArms[0].rotation.x = -0.82 + Math.sin(elapsed * 18) * 0.25;
+            piperArms[1].rotation.x = -0.85 + Math.cos(elapsed * 18) * 0.25;
+          } else {
+            pipesGroup.rotation.z = Math.sin(elapsed * 2.4) * 0.04;
+            pipesGroup.rotation.x = 0;
+            piperHead.rotation.y = Math.sin(elapsed * 1.4) * 0.15;
+            piperArms[0].rotation.x = -0.78 + Math.sin(elapsed * 4.5) * 0.05;
+            piperArms[1].rotation.x = -0.85 + Math.cos(elapsed * 4.5) * 0.06;
+          }
+        }
+      }
+
+      const py = getTerrainHeightAndSurface(piper.x, piper.z).height;
+      const runHop =
+        piper.state === 'fleeing'
+          ? Math.abs(Math.sin(elapsed * 17.5)) * 0.11
+          : piper.state === 'playing'
+            ? Math.abs(Math.sin(elapsed * 5.2)) * 0.025
+            : 0;
+      piperGroup.position.set(piper.x, py + runHop, piper.z);
+      piperGroup.rotation.y = piper.yaw;
     },
     getObstacles: () => obstacles,
     getRivalMapPoints: () => movingCars.map((mc) => ({ x: mc.x, z: mc.z })),
+    getPiperMapPoint: () => ({ x: piper.x, z: piper.z, down: piper.state === 'down' }),
     getRacePosition: (px: number, pz: number, playerLap: number): number => {
       // Project player onto closest circuit segment to measure loop distance from Start Line (-56, 0)
       let bestDistSq = Infinity;
@@ -1951,6 +2313,9 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
           bestHorseZ = an.z;
         }
       }
+      let bestDrayDist = Infinity;
+      let bestDrayX = px;
+      let bestDrayZ = pz;
       for (let i = 0; i < movingDrays.length; i++) {
         const md = movingDrays[i];
         const d = Math.hypot(px - md.x, pz - md.z);
@@ -1959,21 +2324,35 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
           bestHorseX = md.x;
           bestHorseZ = md.z;
         }
+        if (d < bestDrayDist) {
+          bestDrayDist = d;
+          bestDrayX = md.x;
+          bestDrayZ = md.z;
+        }
       }
 
       let bestCarDist = Infinity;
+      let bestCarX = px;
+      let bestCarZ = pz;
       for (let i = 0; i < movingCars.length; i++) {
         const mc = movingCars[i];
         const d = Math.hypot(px - mc.x, pz - mc.z);
-        if (d < bestCarDist) bestCarDist = d;
+        if (d < bestCarDist) {
+          bestCarDist = d;
+          bestCarX = mc.x;
+          bestCarZ = mc.z;
+        }
       }
 
       const trainDist = Math.hypot(px - trainPos.x, pz - trainPos.z);
+      const piperDist = Math.hypot(px - piper.x, pz - piper.z);
       const crowdProximity = Math.max(0, Math.min(1, 1 - (bestCrowdDist - 3) / 26));
       const horseProximity = Math.max(0, Math.min(1, 1 - (bestHorseDist - 4) / 22));
-      const otherCarProximity = Math.max(0, Math.min(1, 1 - (bestCarDist - 4) / 28));
+      const drayProximity = Math.max(0, Math.min(1, 1 - (bestDrayDist - 3) / 26));
+      const otherCarProximity = Math.max(0, Math.min(1, 1 - (bestCarDist - 3) / 15));
       const harbourProximity = Math.max(0, Math.min(1, (px - 35) / 70));
       const trainProximity = Math.max(0, Math.min(1, 1 - (trainDist - 8) / 56));
+      const piperProximity = Math.max(0, Math.min(1, 1 - (piperDist - 3) / 45));
 
       return {
         crowdProximity,
@@ -1984,7 +2363,10 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
         horseProximity,
         horsePan: calcPan(bestHorseX, bestHorseZ),
         horseStartleIntensity: latestHorseStartle,
+        drayProximity,
+        drayPan: calcPan(bestDrayX, bestDrayZ),
         otherCarProximity,
+        otherCarPan: calcPan(bestCarX, bestCarZ),
         harbourProximity,
         harbourPan: calcPan(120, pz),
         dogBarkIntensity: latestDogBarkIntensity,
@@ -1994,6 +2376,11 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
         sheepPan: calcPan(latestSheepX, latestSheepZ),
         trainProximity,
         trainPan: calcPan(trainPos.x, trainPos.z),
+        piperProximity,
+        piperPan: calcPan(piper.x, piper.z),
+        piperPanicLevel: piper.panicLevel,
+        piperDown: piper.state === 'down',
+        piperJustHit: piper.justHit,
       };
     },
     dispose: () => {

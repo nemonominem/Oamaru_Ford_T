@@ -1,5 +1,11 @@
 import { loadTrialRecords, saveTrialRecords } from './errands';
-import { CIRCUIT_CHECKPOINTS, OAMARU_LANDMARKS, WORLD_COLLIDERS, getTerrainSample } from './terrain';
+import {
+  CIRCUIT_CHECKPOINTS,
+  OAMARU_LANDMARKS,
+  ROAD_OBSTRUCTIONS,
+  WORLD_COLLIDERS,
+  getTerrainSample,
+} from './terrain';
 import {
   ControlMode,
   EnvironmentState,
@@ -490,6 +496,31 @@ export function stepVehiclePhysics(
         }
         state.vx -= 1.3 * vn * nx;
         state.vz -= 1.3 * vn * nz;
+      }
+    }
+  }
+
+  // Soft collision resolution against small road obstructions (crates, wool bales, sawhorses, barrows)
+  for (let i = 0; i < ROAD_OBSTRUCTIONS.length; i++) {
+    const obs = ROAD_OBSTRUCTIONS[i];
+    const dx = state.x - obs.x;
+    const dz = state.z - obs.z;
+    const minDist = obs.radius + 1.15;
+    const distSq = dx * dx + dz * dz;
+    if (distSq < minDist * minDist) {
+      const dist = Math.sqrt(distSq) || 0.001;
+      const nx = dx / dist;
+      const nz = dz / dist;
+      const pen = minDist - dist;
+      state.x += nx * pen;
+      state.z += nz * pen;
+      const vn = state.vx * nx + state.vz * nz;
+      if (vn < 0) {
+        if (vn < -0.9) {
+          state.impactStrength = Math.max(state.impactStrength, clamp(Math.abs(vn) / 4.8, 0.22, 0.95));
+        }
+        state.vx -= 1.25 * vn * nx;
+        state.vz -= 1.25 * vn * nz;
       }
     }
   }

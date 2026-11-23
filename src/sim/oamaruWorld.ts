@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { getTerrainHeightAndSurface } from './terrain';
+import { ROAD_OBSTRUCTIONS, ROAD_POTHOLES, getTerrainHeightAndSurface } from './terrain';
 import { TextureBundle } from './textures';
 
 export interface OamaruWorldHandle {
@@ -177,6 +177,166 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
   addRoadRibbon(88.2, 101.8, -95, 135, 6, 54, macadamMat, 0.028);
   addRoadRibbon(88.2, 101.8, -22, 22, 6, 14, cobbleMat, 0.038);
   addRoadRibbon(12, 86, -61.5, -45, 22, 8, mudMat, 0.025);
+
+  // Road Potholes (rendered flush above road crown with dark crater & wet puddle core)
+  const potholeRimMat = track(
+    new THREE.MeshStandardMaterial({
+      color: 0x625747,
+      roughness: 0.96,
+      polygonOffset: true,
+      polygonOffsetFactor: -4,
+      polygonOffsetUnits: -4,
+    })
+  );
+  const potholePitMat = track(
+    new THREE.MeshStandardMaterial({
+      color: 0x2f2820,
+      roughness: 0.92,
+      polygonOffset: true,
+      polygonOffsetFactor: -5,
+      polygonOffsetUnits: -5,
+    })
+  );
+  const potholePuddleMat = track(
+    new THREE.MeshStandardMaterial({
+      color: 0x3b352c,
+      roughness: 0.42,
+      metalness: 0.14,
+      polygonOffset: true,
+      polygonOffsetFactor: -6,
+      polygonOffsetUnits: -6,
+    })
+  );
+  for (let i = 0; i < ROAD_POTHOLES.length; i++) {
+    const ph = ROAD_POTHOLES[i];
+    const baseRoadY = getTerrainHeightAndSurface(ph.x, ph.z, true).height;
+    const phGroup = new THREE.Group();
+    phGroup.position.set(ph.x, baseRoadY + 0.044, ph.z);
+    phGroup.rotation.y = (i * 1.37) % (Math.PI * 2);
+
+    const rimGeo = track(new THREE.RingGeometry(ph.radius * 0.68, ph.radius * 1.04, 16));
+    rimGeo.rotateX(-Math.PI / 2);
+    const rimMesh = new THREE.Mesh(rimGeo, potholeRimMat);
+
+    const pitGeo = track(new THREE.CircleGeometry(ph.radius * 0.72, 16));
+    pitGeo.rotateX(-Math.PI / 2);
+    const pitMesh = new THREE.Mesh(pitGeo, potholePitMat);
+    pitMesh.position.y = 0.002;
+    pitMesh.scale.set(1.06, 1, 0.88);
+
+    const puddleGeo = track(new THREE.CircleGeometry(ph.radius * 0.42, 12));
+    puddleGeo.rotateX(-Math.PI / 2);
+    const puddleMesh = new THREE.Mesh(puddleGeo, potholePuddleMat);
+    puddleMesh.position.set(ph.radius * 0.08, 0.004, -ph.radius * 0.05);
+
+    phGroup.add(rimMesh, pitMesh, puddleMesh);
+    group.add(phGroup);
+  }
+
+  // Occasional Small Road Obstructions (crates, wool bales, barrows, sawhorses, milk churns, branches)
+  const crateWoodMat = track(new THREE.MeshStandardMaterial({ color: 0x87623a, roughness: 0.86 }));
+  const woolBurlapMat = track(new THREE.MeshStandardMaterial({ color: 0xa8926d, roughness: 0.96 }));
+  const sawhorsePaintMat = track(new THREE.MeshStandardMaterial({ color: 0x9b2f26, roughness: 0.76 }));
+  const churnZincMat = track(new THREE.MeshStandardMaterial({ color: 0x9ca4ab, roughness: 0.38, metalness: 0.78 }));
+  const barkMat = track(new THREE.MeshStandardMaterial({ color: 0x4b3928, roughness: 0.95 }));
+  const barrowWheelMat = track(new THREE.MeshStandardMaterial({ color: 0x3b3530, roughness: 0.48, metalness: 0.78 }));
+  const foliageMat = track(new THREE.MeshStandardMaterial({ color: 0x455b38, roughness: 0.9 }));
+  const lanternAmberMat = track(
+    new THREE.MeshStandardMaterial({
+      color: 0xffc15e,
+      emissive: new THREE.Color(0xff9a2e),
+      emissiveIntensity: 0.9,
+      roughness: 0.25,
+    })
+  );
+
+  for (let i = 0; i < ROAD_OBSTRUCTIONS.length; i++) {
+    const obs = ROAD_OBSTRUCTIONS[i];
+    const baseObsY = getTerrainHeightAndSurface(obs.x, obs.z).height;
+    const oGroup = new THREE.Group();
+    oGroup.position.set(obs.x, baseObsY, obs.z);
+    oGroup.rotation.y = obs.yaw;
+
+    if (obs.kind === 'crate') {
+      const box1 = new THREE.Mesh(track(new THREE.BoxGeometry(0.76, 0.58, 0.76)), crateWoodMat);
+      box1.position.set(-0.08, 0.29, 0);
+      box1.castShadow = true;
+      const box2 = new THREE.Mesh(track(new THREE.BoxGeometry(0.46, 0.38, 0.46)), crateWoodMat);
+      box2.position.set(0.18, 0.19, 0.42);
+      box2.rotation.y = 0.42;
+      box2.castShadow = true;
+      oGroup.add(box1, box2);
+    } else if (obs.kind === 'wool-bales') {
+      const bale1 = new THREE.Mesh(track(new THREE.BoxGeometry(0.86, 0.62, 0.64)), woolBurlapMat);
+      bale1.position.set(0, 0.31, -0.1);
+      bale1.castShadow = true;
+      const bale2 = new THREE.Mesh(track(new THREE.BoxGeometry(0.78, 0.54, 0.58)), woolBurlapMat);
+      bale2.position.set(0.14, 0.27, 0.46);
+      bale2.rotation.y = 0.28;
+      bale2.castShadow = true;
+      oGroup.add(bale1, bale2);
+    } else if (obs.kind === 'wheelbarrow') {
+      const tray = new THREE.Mesh(track(new THREE.BoxGeometry(0.62, 0.34, 0.92)), crateWoodMat);
+      tray.position.set(0, 0.44, 0);
+      tray.rotation.x = 0.16;
+      tray.castShadow = true;
+      const wheel = new THREE.Mesh(track(new THREE.TorusGeometry(0.22, 0.04, 6, 14)), barrowWheelMat);
+      wheel.rotation.y = Math.PI / 2;
+      wheel.position.set(0, 0.24, 0.54);
+      const handles = new THREE.Mesh(track(new THREE.BoxGeometry(0.56, 0.06, 1.35)), barkMat);
+      handles.position.set(0, 0.38, -0.18);
+      handles.rotation.x = 0.18;
+      oGroup.add(tray, wheel, handles);
+    } else if (obs.kind === 'sawhorse') {
+      const bar = new THREE.Mesh(track(new THREE.BoxGeometry(1.5, 0.16, 0.1)), sawhorsePaintMat);
+      bar.position.set(0, 0.78, 0);
+      bar.castShadow = true;
+      [-0.56, 0.56].forEach((lx) => {
+        const legA = new THREE.Mesh(track(new THREE.BoxGeometry(0.08, 0.86, 0.08)), crateWoodMat);
+        legA.position.set(lx, 0.4, 0.16);
+        legA.rotation.x = -0.36;
+        legA.castShadow = true;
+        const legB = new THREE.Mesh(track(new THREE.BoxGeometry(0.08, 0.86, 0.08)), crateWoodMat);
+        legB.position.set(lx, 0.4, -0.16);
+        legB.rotation.x = 0.36;
+        legB.castShadow = true;
+        oGroup.add(legA, legB);
+      });
+      const lantern = new THREE.Mesh(track(new THREE.CylinderGeometry(0.08, 0.09, 0.22, 8)), lanternAmberMat);
+      lantern.position.set(0, 0.97, 0);
+      oGroup.add(bar, lantern);
+    } else if (obs.kind === 'milk-churns') {
+      const churnOffsets: [number, number, number][] = [
+        [-0.22, 0, -0.12],
+        [0.24, 0, -0.05],
+        [0.02, 0, 0.28],
+      ];
+      churnOffsets.forEach(([cx, cy, cz], ci) => {
+        const body = new THREE.Mesh(track(new THREE.CylinderGeometry(0.16, 0.18, 0.62, 10)), churnZincMat);
+        body.position.set(cx, cy + 0.31, cz);
+        body.castShadow = true;
+        const neck = new THREE.Mesh(track(new THREE.CylinderGeometry(0.11, 0.15, 0.14, 10)), churnZincMat);
+        neck.position.set(cx, cy + 0.68, cz);
+        if (ci === 2) {
+          body.rotation.z = 0.14;
+        }
+        oGroup.add(body, neck);
+      });
+    } else {
+      const trunk = new THREE.Mesh(track(new THREE.CylinderGeometry(0.09, 0.15, 1.8, 7)), barkMat);
+      trunk.rotation.z = Math.PI / 2 - 0.08;
+      trunk.position.set(0, 0.16, 0);
+      trunk.castShadow = true;
+      const tuft1 = new THREE.Mesh(track(new THREE.DodecahedronGeometry(0.36, 0)), foliageMat);
+      tuft1.position.set(0.65, 0.32, 0.12);
+      tuft1.castShadow = true;
+      const tuft2 = new THREE.Mesh(track(new THREE.DodecahedronGeometry(0.28, 0)), foliageMat);
+      tuft2.position.set(0.25, 0.28, -0.2);
+      oGroup.add(trunk, tuft1, tuft2);
+    }
+
+    group.add(oGroup);
+  }
 
   // Start / Finish 1914 Trial Timber Banner Arch spanning Harbour Street at x = -56
   const startBaseH = getTerrainHeightAndSurface(-56, 0).height;
@@ -678,6 +838,207 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
       title: 'Waitaki Woollen Annex',
       subtitle: 'South Terrace Stores',
     },
+    // Denser Precinct Block Infills (North-West, Harbour North, South-West, South Quay, Civic)
+    {
+      x: -76,
+      z: -24,
+      w: 24,
+      d: 22,
+      floors: 2,
+      facing: 'south',
+      variant: 'italianate-verandah',
+      title: 'North Otago Wool',
+      subtitle: 'Fellmongers & Brokers · 1881',
+      signBg: '#27241e',
+    },
+    {
+      x: -52,
+      z: -48,
+      w: 24,
+      d: 20,
+      floors: 2,
+      facing: 'north',
+      variant: 'greek-revival',
+      title: 'Colonial Bank Annex',
+      subtitle: 'Itchen St Chambers · 1884',
+    },
+    {
+      x: -2,
+      z: -47,
+      w: 20,
+      d: 20,
+      floors: 2,
+      facing: 'north',
+      variant: 'carriage-arch',
+      title: 'Tyne Foundry & Forge',
+      subtitle: 'Agricultural Engineers · 1880',
+      signBg: '#2e241d',
+    },
+    {
+      x: -82,
+      z: 55,
+      w: 24,
+      d: 20,
+      floors: 2,
+      facing: 'west',
+      variant: 'venetian-gothic',
+      title: 'Oamaru Mail Press',
+      subtitle: 'Printing & Stationery · 1879',
+      signBg: '#1e272e',
+    },
+    {
+      x: -82,
+      z: 87,
+      w: 22,
+      d: 20,
+      floors: 2,
+      facing: 'west',
+      variant: 'italianate-verandah',
+      title: 'Queen’s Chambers',
+      subtitle: 'Thames St Drapers · 1885',
+      signBg: '#2f1f21',
+    },
+    {
+      x: -47,
+      z: 56,
+      w: 24,
+      d: 20,
+      floors: 2,
+      facing: 'east',
+      variant: 'grain-hoist',
+      title: 'Tyne Seed & Produce',
+      subtitle: 'Merchants & Millers · 1882',
+    },
+    {
+      x: 0,
+      z: 56,
+      w: 24,
+      d: 20,
+      floors: 2,
+      facing: 'west',
+      variant: 'corinthian-temple',
+      title: 'Waitaki Farmers Co-op',
+      subtitle: 'Stock & Station Agents · 1888',
+      signBg: '#232c24',
+    },
+    {
+      x: 73,
+      z: 56,
+      w: 22,
+      d: 20,
+      floors: 2,
+      facing: 'east',
+      variant: 'grain-hoist',
+      title: 'Breakwater Bond Store',
+      subtitle: 'Customs & Wharfage · 1877',
+      signBg: '#26231d',
+    },
+    {
+      x: 73,
+      z: 84,
+      w: 20,
+      d: 20,
+      floors: 2,
+      facing: 'east',
+      variant: 'greek-revival',
+      title: 'Mariners Institute',
+      subtitle: 'Quay Reading Rooms · 1883',
+    },
+    {
+      x: -127,
+      z: -48,
+      w: 20,
+      d: 20,
+      floors: 2,
+      facing: 'east',
+      variant: 'italianate-verandah',
+      title: 'Star & Garter Inn',
+      subtitle: 'Itchen & Thames · Est. 1867',
+      signBg: '#31201d',
+    },
+    // Outer Itchen St North Terrace (z = -89, facing south)
+    {
+      x: -78,
+      z: -89,
+      w: 24,
+      d: 20,
+      floors: 2,
+      facing: 'south',
+      variant: 'greek-revival',
+      title: 'Itchen Stone Masons',
+      subtitle: 'Whitestone Quarry Office · 1881',
+    },
+    {
+      x: -50,
+      z: -89,
+      w: 24,
+      d: 20,
+      floors: 2,
+      facing: 'south',
+      variant: 'venetian-gothic',
+      title: 'Otago Flour Depot',
+      subtitle: 'Milling & Cartage · 1884',
+      signBg: '#252a30',
+    },
+    {
+      x: 14,
+      z: -89,
+      w: 24,
+      d: 20,
+      floors: 2,
+      facing: 'south',
+      variant: 'portico-palazzo',
+      title: 'North Otago Chambers',
+      subtitle: 'Solicitors & Surveyors · 1886',
+      signBg: '#22262c',
+    },
+    {
+      x: 44,
+      z: -89,
+      w: 24,
+      d: 20,
+      floors: 3,
+      facing: 'south',
+      variant: 'grain-hoist',
+      title: 'Redcastle Granary',
+      subtitle: 'Itchen St Stores · 1880',
+    },
+    // Outer Severn St Western Terrace (x = -173, facing east)
+    {
+      x: -173,
+      z: -30,
+      w: 22,
+      d: 20,
+      floors: 2,
+      facing: 'east',
+      variant: 'italianate-verandah',
+      title: 'Severn Terrace Manse',
+      subtitle: 'West Hillstone Residence · 1885',
+      signBg: '#232b24',
+    },
+    {
+      x: -173,
+      z: 18,
+      w: 24,
+      d: 20,
+      floors: 2,
+      facing: 'east',
+      variant: 'corinthian-temple',
+      title: 'St. Luke Parish Hall',
+      subtitle: 'Severn St Vestry · 1882',
+      signBg: '#2a2220',
+    },
+    {
+      x: -173,
+      z: 64,
+      w: 24,
+      d: 20,
+      floors: 2,
+      facing: 'east',
+      variant: 'greek-revival',
+      title: 'Waitaki High Pavilion',
+      subtitle: 'Old Boys Association · 1889',
+    },
   ];
 
   const buildHistoricalFacade = (spec: BuildingSpec) => {
@@ -728,6 +1089,15 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
     roofMesh.rotation.y = Math.PI / 4;
     roofMesh.position.y = totalH + 1.8;
     bGroup.add(roofMesh);
+
+    if (spec.variant !== 'clocktower-civic') {
+      const chimney = new THREE.Mesh(track(new THREE.BoxGeometry(1.15, 2.3, 1.15)), rusticatedMat);
+      chimney.position.set(spec.w * 0.28, totalH + 1.9, -spec.d * 0.22);
+      chimney.castShadow = true;
+      const pot = new THREE.Mesh(track(new THREE.CylinderGeometry(0.18, 0.22, 0.55, 8)), limestoneMat);
+      pot.position.set(spec.w * 0.28, totalH + 3.25, -spec.d * 0.22);
+      bGroup.add(chimney, pot);
+    }
 
     const cols = Math.max(3, Math.floor(spec.w / 4.2));
     const isRoundCol = spec.variant === 'corinthian-temple' || spec.variant === 'portico-palazzo';
@@ -944,10 +1314,10 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
 
   // Otago Cabbage Trees & Norfolk Pines along verges & hillsides
   const treeCoords: [number, number][] = [
-    [-172, -45], [-176, -10], [-174, 30], [-176, 72], [-170, 110],
+    [-190, -45], [-192, -10], [-190, 30], [-192, 72], [-174, 110],
     [76, 134], [42, 136], [-12, 138], [-65, 136], [-125, 136],
-    [112, 108], [115, 78], [58, -92], [18, -95], [-55, -92],
-    [-88, -88], [78, -88], [-175, -80], [-172, 145], [108, 135],
+    [112, 108], [115, 78], [58, -108], [18, -108], [-55, -108],
+    [-88, -108], [78, -104], [-188, -80], [-172, 145], [108, 135],
   ];
   const trunkGeo = track(new THREE.CylinderGeometry(0.18, 0.34, 4.4, 7));
   const trunkMat = track(new THREE.MeshStandardMaterial({ color: 0x4e3e2d, roughness: 0.92 }));
@@ -1023,6 +1393,8 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
       macadamMat.roughness = 0.9 - wetness * 0.44;
       wharfMat.roughness = 0.84 - wetness * 0.5;
       mudMat.roughness = 0.58 - wetness * 0.4;
+      potholePuddleMat.roughness = 0.42 - wetness * 0.34;
+      potholePuddleMat.metalness = 0.14 + wetness * 0.38;
 
       // Snow / winter frost accumulation across verges, roofs & road shoulders
       terrainMat.color.copy(cNormalTerrain).lerp(cSnowTerrain, snowCover * 0.78);

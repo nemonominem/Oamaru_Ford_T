@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Map as MapIcon, X } from 'lucide-react';
 import { OAMARU_HISTORICAL_BUILDINGS } from '../sim/historicalBuildings';
+import { WaitingMapPoint } from '../sim/passengers';
 import { CIRCUIT_CHECKPOINTS, CIRCUIT_LOOP_POINTS, SIDE_STREET_BLOCKADES } from '../sim/terrain';
 import { VehicleState } from '../sim/types';
 
@@ -8,6 +9,9 @@ interface MinimapOverlayProps {
   telemetry: VehicleState;
   rivals?: { x: number; z: number }[];
   trainPos?: { x: number; z: number } | null;
+  piperPos?: { x: number; z: number; down: boolean } | null;
+  waitingPassengers?: WaitingMapPoint[];
+  passengerTarget?: { x: number; z: number; label: string; name: string } | null;
   errandTarget?: { x: number; z: number; label: string; isDropoff: boolean } | null;
 }
 
@@ -18,6 +22,9 @@ export const MinimapOverlay: React.FC<MinimapOverlayProps> = ({
   telemetry,
   rivals = [],
   trainPos = null,
+  piperPos = null,
+  waitingPassengers = [],
+  passengerTarget = null,
   errandTarget = null,
 }) => {
   const [closed, setClosed] = useState(false);
@@ -77,6 +84,26 @@ export const MinimapOverlay: React.FC<MinimapOverlayProps> = ({
   const nextCp = CIRCUIT_CHECKPOINTS[telemetry.nextSector] ?? CIRCUIT_CHECKPOINTS[0];
 
   const errandDist = errandTarget ? Math.round(Math.hypot(errandTarget.x - px, errandTarget.z - pz)) : null;
+
+  let nearestHail: WaitingMapPoint | null = null;
+  let nearestHailDist = Infinity;
+  for (const wp of waitingPassengers) {
+    const d = Math.hypot(wp.x - px, wp.z - pz);
+    if (d < nearestHailDist) {
+      nearestHailDist = d;
+      nearestHail = wp;
+    }
+  }
+
+  const compassDir = (tx: number, tz: number) => {
+    const dx = tx - px;
+    const dz = tz - pz;
+    // In world coordinates +X is East (Harbour), +Z is South (Wanbrow)
+    const angle = Math.atan2(dx, -dz); // 0 = North (-Z), +PI/2 = East (+X)
+    const dirs = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+    const idx = ((Math.round(angle / (Math.PI / 4)) % 8) + 8) % 8;
+    return dirs[idx];
+  };
 
   return (
     <aside
@@ -281,6 +308,96 @@ export const MinimapOverlay: React.FC<MinimapOverlayProps> = ({
             />
           ))}
 
+          {/* Scottish Bagpiper Marker */}
+          {piperPos && (
+            <circle
+              cx={toMapX(piperPos.x)}
+              cy={toMapY(piperPos.z)}
+              r={piperPos.down ? 2.4 : 3.2}
+              fill={piperPos.down ? '#9e473f' : '#2f9460'}
+              stroke="#f2e6c9"
+              strokeWidth={0.9}
+            />
+          )}
+
+          {/* Waiting Hitchhiking Passengers (in-bounds markers + off-map edge compass pins) */}
+          {waitingPassengers.map((wp) => {
+            const mx = toMapX(wp.x);
+            const my = toMapY(wp.z);
+            const dx = mx - MAP_SIZE * 0.5;
+            const dy = my - MAP_SIZE * 0.5;
+            const margin = 10;
+            const maxHalf = MAP_SIZE * 0.5 - margin;
+            const isOffMap = Math.abs(dx) > maxHalf || Math.abs(dy) > maxHalf;
+
+            if (!isOffMap) {
+              return (
+                <g key={wp.id} transform={`translate(${mx}, ${my})`}>
+                  <title>{`${wp.name} (${wp.roleLabel}) — ${wp.pickupLabel}`}</title>
+                  {wp.isInstructor && (
+                    <circle cx={0} cy={0} r={7.2} fill="none" stroke="#f0c65d" strokeWidth={1.1} strokeDasharray="2 1.5" />
+                  )}
+                  <circle
+                    cx={0}
+                    cy={0}
+                    r={5.0}
+                    fill={wp.color}
+                    stroke={wp.isInstructor ? '#fff3cf' : '#161411'}
+                    strokeWidth={1.1}
+                  />
+                  <text
+                    x={0}
+                    y={2.1}
+                    textAnchor="middle"
+                    fontSize="6.2"
+                    fontWeight="800"
+                    fill="#161411"
+                  >
+                    {wp.initial}
+                  </text>
+                </g>
+              );
+            }
+
+            const scale = Math.max(Math.abs(dx), Math.abs(dy)) / maxHalf;
+            const ex = MAP_SIZE * 0.5 + dx / scale;
+            const ey = MAP_SIZE * 0.5 + dy / scale;
+            const angDeg = (Math.atan2(dy, dx) * 180) / Math.PI;
+            return (
+              <g key={wp.id} transform={`translate(${ex}, ${ey})`}>
+                <title>{`${wp.name} (${Math.round(Math.hypot(wp.x - px, wp.z - pz))}m ${compassDir(wp.x, wp.z)})`}</title>
+                <g transform={`rotate(${angDeg})`}>
+                  <polygon points="8,0 3,-3.2 3,3.2" fill={wp.color} stroke="#161411" strokeWidth={0.7} />
+                </g>
+                <circle cx={0} cy={0} r={5.4} fill={wp.color} stroke="#161411" strokeWidth={1.0} />
+                <text x={0} y={2.1} textAnchor="middle" fontSize="6.2" fontWeight="800" fill="#161411">
+                  {wp.initial}
+                </text>
+              </g>
+            );
+          })}
+
+          {/* Active Passenger Destination Target (with off-map edge clamp) */}
+          {passengerTarget &&
+            (() => {
+              const tx = toMapX(passengerTarget.x);
+              const ty = toMapY(passengerTarget.z);
+              const dx = tx - MAP_SIZE * 0.5;
+              const dy = ty - MAP_SIZE * 0.5;
+              const maxHalf = MAP_SIZE * 0.5 - 11;
+              const offMap = Math.abs(dx) > maxHalf || Math.abs(dy) > maxHalf;
+              const sc = offMap ? Math.max(Math.abs(dx), Math.abs(dy)) / maxHalf : 1;
+              const pxPlot = MAP_SIZE * 0.5 + dx / sc;
+              const pyPlot = MAP_SIZE * 0.5 + dy / sc;
+              return (
+                <g transform={`translate(${pxPlot}, ${pyPlot})`}>
+                  <title>{`Dropoff: ${passengerTarget.label}`}</title>
+                  <circle cx={0} cy={0} r={6.8} fill="none" stroke="#5ec2e6" strokeWidth={1.5} />
+                  <polygon points="0,-4 4,0 0,4 -4,0" fill="#5ec2e6" stroke="#161411" strokeWidth={0.8} />
+                </g>
+              );
+            })()}
+
           {/* Active 1914 Chauffeur Errand Target */}
           {errandTarget && (
             <g transform={`translate(${toMapX(errandTarget.x)}, ${toMapY(errandTarget.z)})`}>
@@ -316,12 +433,37 @@ export const MinimapOverlay: React.FC<MinimapOverlayProps> = ({
 
       <div className="mt-1.5 flex items-center justify-between text-[11px] text-[#B7AB98]">
         <span className="truncate pr-2">
-          {errandTarget ? `${errandTarget.isDropoff ? 'Dropoff' : 'Pickup'}: ${errandTarget.label}` : closestName}
+          {errandTarget
+            ? `${errandTarget.isDropoff ? 'Dropoff' : 'Pickup'}: ${errandTarget.label}`
+            : passengerTarget
+              ? `Drop: ${passengerTarget.label}`
+              : nearestHail
+                ? `Hail: ${nearestHail.name}`
+                : closestName}
         </span>
         <span className="font-mono-tabular shrink-0 text-[#9E9280]">
-          {errandDist !== null ? `${errandDist}m` : `${Math.round(closestDist)}m`}
+          {errandDist !== null
+            ? `${errandDist}m`
+            : passengerTarget
+              ? `${Math.round(Math.hypot(passengerTarget.x - px, passengerTarget.z - pz))}m ${compassDir(
+                  passengerTarget.x,
+                  passengerTarget.z
+                )}`
+              : nearestHail
+                ? `${Math.round(nearestHailDist)}m ${compassDir(nearestHail.x, nearestHail.z)}`
+                : `${Math.round(closestDist)}m`}
         </span>
       </div>
+
+      {waitingPassengers.length > 0 && (
+        <div className="mt-1 border-t border-white/10 pt-1 text-[10px] leading-tight text-[#9E9280]">
+          <span className="text-[#e8b948] font-semibold">A</span> Tutor ·{' '}
+          <span className="text-[#f3ede0] font-semibold">B</span> Sheep ·{' '}
+          <span className="text-[#d97b93] font-semibold">K</span> Lady ·{' '}
+          <span className="text-[#69c292] font-semibold">T</span> Boy ·{' '}
+          <span className="text-[#6aa9d9] font-semibold">C</span> Capt
+        </div>
+      )}
     </aside>
   );
 };

@@ -19,6 +19,9 @@ import {
   RotateCcw,
   Sun,
   Sunset,
+  UserPlus,
+  UserMinus,
+  Users,
   Volume2,
   VolumeX,
   Wind,
@@ -26,6 +29,7 @@ import {
 } from 'lucide-react';
 import { ActiveErrandState, OAMARU_ERRANDS } from '../sim/errands';
 import { OAMARU_HISTORICAL_BUILDINGS } from '../sim/historicalBuildings';
+import { PASSENGERS, PassengerHudState, PassengerSpec } from '../sim/passengers';
 import { UNITY_CSHARP_SCRIPTS } from '../sim/unityScripts';
 import {
   CameraMode,
@@ -47,6 +51,8 @@ interface ControlDockProps {
   headlightsOn: boolean;
   wiperOn: boolean;
   errandState: ActiveErrandState;
+  passengerHud: PassengerHudState;
+  onPassengerAction: () => void;
   onCameraChange: (mode: CameraMode) => void;
   onControlModeChange: (mode: ControlMode) => void;
   onWeatherChange: (weather: WeatherType) => void;
@@ -62,6 +68,7 @@ interface ControlDockProps {
   onToggleIgnition: () => void;
   onResetVehicle: () => void;
   onJumpToBuilding: (building: HistoricalBuilding) => void;
+  onJumpToPassenger: (spec: PassengerSpec) => void;
   onCrankEngine: () => void;
   onHorn: () => void;
   onHandThrottleChange: (val: number) => void;
@@ -111,6 +118,8 @@ export const ControlDock: React.FC<ControlDockProps> = ({
   headlightsOn,
   wiperOn,
   errandState,
+  passengerHud,
+  onPassengerAction,
   onCameraChange,
   onControlModeChange,
   onWeatherChange,
@@ -126,6 +135,7 @@ export const ControlDock: React.FC<ControlDockProps> = ({
   onToggleIgnition,
   onResetVehicle,
   onJumpToBuilding,
+  onJumpToPassenger,
   onCrankEngine,
   onHorn,
   onHandThrottleChange,
@@ -136,6 +146,7 @@ export const ControlDock: React.FC<ControlDockProps> = ({
   const [collapsed, setCollapsed] = useState(false);
   const [unityDrawerOpen, setUnityDrawerOpen] = useState(false);
   const [heritageDrawerOpen, setHeritageDrawerOpen] = useState(false);
+  const [passengersDrawerOpen, setPassengersDrawerOpen] = useState(false);
   const [selectedScriptIdx, setSelectedScriptIdx] = useState(0);
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
 
@@ -790,6 +801,35 @@ export const ControlDock: React.FC<ControlDockProps> = ({
                   </span>
                 </button>
 
+                {(passengerHud.onboardId !== null || passengerHud.nearbyWaitingId !== null) && (
+                  <button
+                    type="button"
+                    onClick={onPassengerAction}
+                    className={`rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1 ${
+                      passengerHud.onboardId !== null
+                        ? 'border-[#5ec2e6]/60 bg-[#255063]/40 text-[#b7ebff] hover:bg-[#2f667e]/50'
+                        : 'border-[#73c991]/60 bg-[#407a51]/35 text-[#b5f2c4] hover:bg-[#4e9362]/45'
+                    }`}
+                    title={
+                      passengerHud.onboardId !== null
+                        ? `Unload ${passengerHud.onboardName ?? 'passenger'} (P)`
+                        : `Accept ${passengerHud.nearbyWaitingName ?? 'passenger'} (P)`
+                    }
+                  >
+                    {passengerHud.onboardId !== null ? (
+                      <>
+                        <UserMinus className="h-3.5 w-3.5" />
+                        <span>Unload (P)</span>
+                      </>
+                    ) : (
+                      <>
+                        <UserPlus className="h-3.5 w-3.5" />
+                        <span>Accept (P)</span>
+                      </>
+                    )}
+                  </button>
+                )}
+
                 <button
                   type="button"
                   onClick={onToggleMute}
@@ -813,6 +853,21 @@ export const ControlDock: React.FC<ControlDockProps> = ({
                   type="button"
                   onClick={() => {
                     setUnityDrawerOpen(false);
+                    setHeritageDrawerOpen(false);
+                    setPassengersDrawerOpen(true);
+                  }}
+                  className="flex items-center gap-1.5 rounded-lg border border-[#73c991]/45 bg-[#407a51]/20 px-2.5 py-1.5 text-xs font-medium text-[#b5f2c4] hover:bg-[#407a51]/35 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  title="View all roadside passengers, their locations, and the Ford T Driving Tutor"
+                >
+                  <Users className="h-3.5 w-3.5 text-[#73c991]" />
+                  <span>Passengers ({passengerHud.waitingPoints.length})</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUnityDrawerOpen(false);
+                    setPassengersDrawerOpen(false);
                     setHeritageDrawerOpen(true);
                   }}
                   className="flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/8 px-2.5 py-1.5 text-xs font-medium text-[#F4EFE6] hover:bg-white/14 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
@@ -825,6 +880,7 @@ export const ControlDock: React.FC<ControlDockProps> = ({
                   type="button"
                   onClick={() => {
                     setHeritageDrawerOpen(false);
+                    setPassengersDrawerOpen(false);
                     setUnityDrawerOpen(true);
                   }}
                   className="flex items-center gap-1.5 rounded-lg border border-[#D4A656]/40 bg-[#D4A656]/15 px-2.5 py-1.5 text-xs font-medium text-[#E8C073] hover:bg-[#D4A656]/25 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
@@ -867,6 +923,91 @@ export const ControlDock: React.FC<ControlDockProps> = ({
           </div>
         )}
       </div>
+
+      {/* Oamaru Circuit Roadside Passengers Directory */}
+      {passengersDrawerOpen && (
+        <div className="fixed inset-0 z-40 flex items-center justify-end bg-black/55">
+          <div className="flex h-full w-[min(540px,95vw)] flex-col border-l border-white/15 bg-[#181613] text-[#F4EFE6] shadow-2xl">
+            <div className="flex items-center justify-between border-b border-white/10 px-6 py-4">
+              <div>
+                <h2 className="font-display text-xl font-semibold">1914 Roadside Passengers</h2>
+                <p className="text-xs text-[#B7AB98]">
+                  Look for tall green/gold roadside beacons, waving handkerchiefs &amp; map initials (max 1 aboard)
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPassengersDrawerOpen(false)}
+                className="rounded-lg p-1.5 text-[#CFC5B4] hover:bg-white/10 hover:text-white cursor-pointer"
+                aria-label="Close passengers drawer"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto divide-y divide-white/10 px-6">
+              {PASSENGERS.map((p) => {
+                const isOnboard = passengerHud.onboardId === p.id;
+                const isWaiting = passengerHud.waitingPoints.some((wp) => wp.id === p.id);
+                const dx = p.pickupX - telemetry.x;
+                const dz = p.pickupZ - telemetry.z;
+                const distM = Math.round(Math.hypot(dx, dz));
+                const bearingAng = Math.atan2(dx, -dz);
+                const dirs = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+                const bearing = dirs[((Math.round(bearingAng / (Math.PI / 4)) % 8) + 8) % 8];
+
+                return (
+                  <article key={p.id} className="py-4">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex items-start gap-3">
+                        <span
+                          className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-black/40 text-xs font-extrabold text-[#161411]"
+                          style={{ backgroundColor: p.mapColor }}
+                        >
+                          {p.mapInitial}
+                        </span>
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h3 className="font-display text-base font-semibold text-[#F6F1E7]">{p.name}</h3>
+                            {p.id === 'mechanic' && (
+                              <span className="rounded bg-[#D4A656]/20 px-1.5 py-0.5 text-[10px] font-semibold text-[#E8C073]">
+                                Driving Tutor
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-[#C7BBA7]">{p.roleLabel}</p>
+                          <p className="mt-1 text-xs text-[#9E9280]">
+                            <span className="text-[#CFC5B4]">Waits at:</span> {p.pickupLabel} ·{' '}
+                            <span className="font-mono-tabular text-[#E8C073]">
+                              {isOnboard ? 'Riding with you' : isWaiting ? `${distM}m ${bearing}` : 'Stepping out'}
+                            </span>
+                          </p>
+                          <p className="mt-0.5 text-xs text-[#9E9280]">
+                            <span className="text-[#CFC5B4]">Wants lift to:</span> {p.dropoffLabel}
+                          </p>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        disabled={isOnboard || !isWaiting}
+                        onClick={() => {
+                          onJumpToPassenger(p);
+                          setPassengersDrawerOpen(false);
+                        }}
+                        className="flex items-center gap-1.5 rounded-lg border border-[#73c991]/45 bg-[#407a51]/25 px-3 py-1.5 text-xs font-medium text-[#b5f2c4] hover:bg-[#407a51]/40 disabled:opacity-45 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                      >
+                        <MapPin className="h-3.5 w-3.5" />
+                        <span>{isOnboard ? 'Aboard' : 'Pull Up Nearby'}</span>
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Historical Oamaru Victorian Precinct Buildings Drawer */}
       {heritageDrawerOpen && (

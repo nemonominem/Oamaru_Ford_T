@@ -13,6 +13,15 @@ import {
 import { buildFordModelT } from '../sim/modelTGeometry';
 import { buildOamaruTraffic } from '../sim/oamaruTraffic';
 import { buildOamaruWorld } from '../sim/oamaruWorld';
+import {
+  PassengerHudState,
+  PassengerRideEvent,
+  WaitingMapPoint,
+  buildPassengerSystem,
+  getMechanicLiveLesson,
+  getPassengerById,
+  pickPassengerRideLine,
+} from '../sim/passengers';
 import { stepVehiclePhysics } from '../sim/physics';
 import {
   BadDrivingReason,
@@ -34,6 +43,11 @@ interface OamaruViewportProps {
   wiperOnRef: React.MutableRefObject<boolean>;
   audioRef: React.MutableRefObject<ModelTAudioEngine>;
   hornTriggerRef?: React.MutableRefObject<number>;
+  passengerActionTriggerRef?: React.MutableRefObject<number>;
+  resetTriggerRef?: React.MutableRefObject<number>;
+  passengerHud: PassengerHudState;
+  onPassengerHudChange: (hud: PassengerHudState) => void;
+  onPassengerAction: () => void;
   errandState: ActiveErrandState;
   errandStateRef: React.MutableRefObject<ActiveErrandState>;
   onErrandUpdate: React.Dispatch<React.SetStateAction<ActiveErrandState>>;
@@ -97,6 +111,11 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
   wiperOnRef,
   audioRef,
   hornTriggerRef,
+  passengerActionTriggerRef,
+  resetTriggerRef,
+  passengerHud,
+  onPassengerHudChange,
+  onPassengerAction,
   errandState,
   errandStateRef,
   onErrandUpdate,
@@ -107,6 +126,8 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
   onTelemetryRef.current = onTelemetryTick;
   const onErrandUpdateRef = useRef(onErrandUpdate);
   onErrandUpdateRef.current = onErrandUpdate;
+  const onPassengerHudRef = useRef(onPassengerHudChange);
+  onPassengerHudRef.current = onPassengerHudChange;
 
   const [contextLost, setContextLost] = useState(false);
   const [dialogue, setDialogue] = useState<StreetDialogueEvent | null>(null);
@@ -117,7 +138,10 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
   const [minimapMeta, setMinimapMeta] = useState<{
     rivals: { x: number; z: number }[];
     trainPos: { x: number; z: number } | null;
-  }>({ rivals: [], trainPos: null });
+    piperPos: { x: number; z: number; down: boolean } | null;
+    waitingPassengers: WaitingMapPoint[];
+    passengerTarget: { x: number; z: number; label: string; name: string } | null;
+  }>({ rivals: [], trainPos: null, piperPos: null, waitingPassengers: [], passengerTarget: null });
 
   useEffect(() => {
     const container = mountRef.current;
@@ -209,6 +233,9 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
 
     const modelT = buildFordModelT(isSoftwareGl);
     scene.add(modelT.root);
+
+    const passengers = buildPassengerSystem(modelT.chassisGroup);
+    scene.add(passengers.group);
 
     // Contact shadow beneath car
     const shadowCanvas = document.createElement('canvas');
@@ -414,11 +441,21 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
     let dialogueId = 0;
     let chatCursor = 0;
     let scoldCursor = 0;
+    let piperHitCursor = 0;
     let lastHornCount = hornTriggerRef?.current ?? 0;
+    let lastPassengerActionCount = passengerActionTriggerRef?.current ?? 0;
+    let lastResetCount = resetTriggerRef?.current ?? 0;
     let lastBackfireCount = vehicleStateRef.current.backfireTrigger;
     let prevKickbackWarning = vehicleStateRef.current.crankKickbackWarning;
     let badDrivingMomentum = 0;
     let errandCooldownUntil = 0;
+    let lastPassengerBanterAt = -10000;
+    let lastFullCarLineAt = -10000;
+    let lastImpactAt = -10000;
+    let passengerBanterCursor = 0;
+    let autoDropoffDwellSec = 0;
+    let passengerNotice: string | null = null;
+    let passengerNoticeUntil = 0;
 
     const afterDraw = (cb: () => void) => {
       const gl = renderer.getContext() as WebGL2RenderingContext;
@@ -599,6 +636,25 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
       const spatialHints = traffic.getSpatialAudioHints(state.x, state.z, state.yaw, trainPos);
       audioRef.current.update(state, env, spatialHints);
 
+      if (spatialHints.piperJustHit) {
+        audioRef.current.playBagpipeDeflateCrash(spatialHints.piperPan);
+        state.impactStrength = Math.max(state.impactStrength, 0.54);
+        state.courtesyScore = Math.max(0, state.courtesyScore - 15);
+        lastScoldAt = now;
+        const entry = pickScoldingLine('piperHit', piperHitCursor);
+        piperHitCursor += 1;
+        dialogueId += 1;
+        dialogueExpireAt = now + 5200;
+        setDialogue({
+          id: dialogueId,
+          speaker: entry.role,
+          location: spatialHints.nearestClusterLabel,
+          text: entry.text,
+          isScolding: true,
+        });
+        audioRef.current.speakStreetLine(entry.text, entry.role, true, 1.0);
+      }
+
       // Errand progression check
       const curErrand = errandStateRef.current;
       if (now > errandCooldownUntil && (curErrand.phase === 'to-pickup' || curErrand.phase === 'to-dropoff')) {
@@ -630,6 +686,153 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
             }));
           }
         }
+      }
+
+      if ((resetTriggerRef?.current ?? 0) !== lastResetCount) {
+        lastResetCount = resetTriggerRef?.current ?? 0;
+        passengers.resetAll();
+        autoDropoffDwellSec = 0;
+        passengerNotice = null;
+      }
+
+      if (state.impactStrength > 0.35) {
+        lastImpactAt = now;
+      }
+
+      const pUpdate = passengers.update(frameDt, elapsed, state);
+      let curOnboardId = passengers.getOnboardId();
+
+      const speakPassengerDialogue = (
+        speakerName: string,
+        voiceRole: string,
+        locationLabel: string,
+        text: string,
+        interrupt = true
+      ) => {
+        dialogueId += 1;
+        dialogueExpireAt = now + 5400;
+        setDialogue({
+          id: dialogueId,
+          speaker: speakerName,
+          location: locationLabel,
+          text,
+          isScolding: false,
+        });
+        audioRef.current.speakStreetLine(text, voiceRole, interrupt, 0.96);
+      };
+
+      const curPassengerAction = passengerActionTriggerRef?.current ?? lastPassengerActionCount;
+      const passengerActionTriggered = curPassengerAction !== lastPassengerActionCount;
+      lastPassengerActionCount = curPassengerAction;
+
+      if (passengerActionTriggered) {
+        if (curOnboardId) {
+          if (state.speedMph > 16) {
+            passengerNotice = 'Slow down under 16 mph to unload safely!';
+            passengerNoticeUntil = now + 2600;
+          } else {
+            const unloaded = passengers.unloadPassenger(state.x, state.z, pUpdate.atPreferredDropoff);
+            curOnboardId = null;
+            autoDropoffDwellSec = 0;
+            if (unloaded) {
+              audioRef.current.playPassengerBell(false);
+              if (pUpdate.atPreferredDropoff) {
+                state.courtesyScore = Math.min(100, state.courtesyScore + 10);
+                passengerNotice = `Dropped off ${unloaded.shortName} at ${unloaded.dropoffLabel}!`;
+                passengerNoticeUntil = now + 3500;
+                speakPassengerDialogue(
+                  unloaded.shortName,
+                  unloaded.voiceRole,
+                  unloaded.dropoffLabel,
+                  unloaded.dropoffSuccessLine,
+                  true
+                );
+              } else {
+                passengerNotice = `${unloaded.shortName} stepped out onto the kerb.`;
+                passengerNoticeUntil = now + 2800;
+                speakPassengerDialogue(
+                  unloaded.shortName,
+                  unloaded.voiceRole,
+                  spatialHints.nearestClusterLabel,
+                  unloaded.earlyUnloadLine,
+                  true
+                );
+              }
+            }
+          }
+        } else if (pUpdate.nearbyWaiting) {
+          if (state.speedMph > 14) {
+            passengerNotice = `Slow below 14 mph to pick up ${pUpdate.nearbyWaiting.shortName}!`;
+            passengerNoticeUntil = now + 2600;
+          } else {
+            const boarded = pUpdate.nearbyWaiting;
+            passengers.boardPassenger(boarded);
+            curOnboardId = boarded.id;
+            autoDropoffDwellSec = 0;
+            audioRef.current.playPassengerBell(true);
+            passengerNotice =
+              boarded.id === 'mechanic'
+                ? 'Arthur is aboard! Watch his live Ford T driving lessons above.'
+                : `Picked up ${boarded.shortName}! Destination: ${boarded.dropoffLabel}.`;
+            passengerNoticeUntil = now + 4200;
+            lastPassengerBanterAt = now;
+            speakPassengerDialogue(
+              boarded.shortName,
+              boarded.voiceRole,
+              boarded.pickupLabel,
+              boarded.greetingLine,
+              true
+            );
+          }
+        }
+      }
+
+      // Friendly auto-dropoff when stopped cleanly at a non-instructor passenger's preferred destination
+      if (curOnboardId && curOnboardId !== 'mechanic' && pUpdate.atPreferredDropoff && state.speedMph < 2.8) {
+        autoDropoffDwellSec += frameDt;
+        if (autoDropoffDwellSec >= 1.1) {
+          const unloaded = passengers.unloadPassenger(state.x, state.z, true);
+          curOnboardId = null;
+          autoDropoffDwellSec = 0;
+          if (unloaded) {
+            audioRef.current.playPassengerBell(false);
+            state.courtesyScore = Math.min(100, state.courtesyScore + 10);
+            passengerNotice = `Arrived! ${unloaded.shortName} hopped out at ${unloaded.dropoffLabel}!`;
+            passengerNoticeUntil = now + 3800;
+            speakPassengerDialogue(
+              unloaded.shortName,
+              unloaded.voiceRole,
+              unloaded.dropoffLabel,
+              unloaded.dropoffSuccessLine,
+              true
+            );
+          }
+        }
+      } else {
+        autoDropoffDwellSec = 0;
+      }
+
+      if (passengerNotice && now > passengerNoticeUntil) {
+        passengerNotice = null;
+      }
+
+      // Funny protest when slowing past another waving hitchhiker with a full front seat (max 1!)
+      if (
+        curOnboardId &&
+        pUpdate.nearbyWaiting &&
+        state.speedMph < 12 &&
+        now - lastFullCarLineAt > 8500 &&
+        now - lastScoldAt > 3500
+      ) {
+        lastFullCarLineAt = now;
+        const waver = pUpdate.nearbyWaiting;
+        speakPassengerDialogue(
+          waver.shortName,
+          waver.voiceRole,
+          'Front Seat Full (Max 1)',
+          waver.fullCarLine,
+          false
+        );
       }
 
       let badReason: BadDrivingReason | null = null;
@@ -673,6 +876,35 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
           isScolding: true,
         });
         audioRef.current.speakStreetLine(entry.text, entry.role, true, 0.95);
+      } else if (curOnboardId) {
+        // Active passenger reacts dynamically to bumps, horn, skids, speeding, bagpiper, or gives Ford T lessons!
+        let rideEvt: PassengerRideEvent | null = null;
+        if (state.impactStrength > 0.25) rideEvt = 'bump';
+        else if (hornFired) rideEvt = 'horn';
+        else if (isSkidding) rideEvt = 'skid';
+        else if (isSpeeding) rideEvt = 'speeding';
+        else if (spatialHints.piperProximity > 0.48 && !spatialHints.piperDown) rideEvt = 'near_piper';
+
+        const cooldownMs = rideEvt ? 4800 : 9800;
+        if (now - lastPassengerBanterAt > cooldownMs && now - lastScoldAt > 4200) {
+          lastPassengerBanterAt = now;
+          passengerBanterCursor += 1;
+          const spec = getPassengerById(curOnboardId);
+          const line = pickPassengerRideLine(
+            curOnboardId,
+            rideEvt ?? 'slow_cruise',
+            passengerBanterCursor,
+            state,
+            mode
+          );
+          speakPassengerDialogue(
+            spec.shortName,
+            spec.voiceRole,
+            curOnboardId === 'mechanic' ? 'Ford T Lesson' : `En route: ${spec.dropoffLabel}`,
+            line,
+            rideEvt !== null
+          );
+        }
       } else if (
         !badReason &&
         spatialHints.nearestCrowdDist < 17.5 &&
@@ -694,7 +926,9 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
           isScolding: false,
         });
         audioRef.current.speakStreetLine(entry.text, entry.role, false, vol);
-      } else if (dialogueExpireAt > 0 && now > dialogueExpireAt) {
+      }
+
+      if (dialogueExpireAt > 0 && now > dialogueExpireAt) {
         dialogueExpireAt = 0;
         setDialogue(null);
       }
@@ -1059,9 +1293,39 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
           ],
         };
         setMinimapTelemetry(snapshot);
+        const onboardSpec = curOnboardId ? getPassengerById(curOnboardId) : null;
+        const waitingPts = passengers.getWaitingMapPoints();
         setMinimapMeta({
           rivals: traffic.getRivalMapPoints(),
           trainPos,
+          piperPos: traffic.getPiperMapPoint(),
+          waitingPassengers: waitingPts,
+          passengerTarget: onboardSpec
+            ? {
+                x: onboardSpec.dropoffX,
+                z: onboardSpec.dropoffZ,
+                label: onboardSpec.dropoffLabel,
+                name: onboardSpec.shortName,
+              }
+            : null,
+        });
+        onPassengerHudRef.current({
+          onboardId: curOnboardId,
+          onboardName: onboardSpec ? onboardSpec.shortName : null,
+          onboardRole: onboardSpec ? onboardSpec.roleLabel : null,
+          dropoffLabel: onboardSpec ? onboardSpec.dropoffLabel : null,
+          dropoffX: onboardSpec ? onboardSpec.dropoffX : null,
+          dropoffZ: onboardSpec ? onboardSpec.dropoffZ : null,
+          nearbyWaitingId: pUpdate.nearbyWaiting ? pUpdate.nearbyWaiting.id : null,
+          nearbyWaitingName: pUpdate.nearbyWaiting ? pUpdate.nearbyWaiting.shortName : null,
+          nearbyWaitingRole: pUpdate.nearbyWaiting ? pUpdate.nearbyWaiting.roleLabel : null,
+          nearbyWaitingDist: pUpdate.nearbyWaiting ? Math.round(pUpdate.nearbyDist) : null,
+          waitingPoints: waitingPts,
+          coachTip:
+            curOnboardId === 'mechanic'
+              ? getMechanicLiveLesson(state, mode, (now - lastImpactAt) / 1000)
+              : null,
+          noticeText: passengerNotice,
         });
         onTelemetryRef.current(snapshot, { ...env });
       }
@@ -1103,6 +1367,7 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
       contactShadowMat.dispose();
       contactShadowTex.dispose();
       envTex.dispose();
+      passengers.dispose();
       traffic.dispose();
       modelT.dispose();
       world.dispose();
@@ -1122,6 +1387,8 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
     wiperOnRef,
     audioRef,
     hornTriggerRef,
+    passengerActionTriggerRef,
+    resetTriggerRef,
     errandStateRef,
   ]);
 
@@ -1134,6 +1401,11 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
           return { x: stop.x, z: stop.z, label: stop.label, isDropoff };
         })()
       : null;
+
+  const showPassengerBanner =
+    passengerHud.onboardId !== null ||
+    passengerHud.nearbyWaitingId !== null ||
+    passengerHud.noticeText !== null;
 
   return (
     <div className="relative h-full w-full bg-[#1a1815]">
@@ -1162,10 +1434,79 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
         </div>
       )}
 
+      {showPassengerBanner && (
+        <div
+          className={`fixed left-1/2 -translate-x-1/2 z-20 flex max-w-lg flex-col gap-1.5 rounded-xl border px-4 py-2 shadow-xl transition-all ${
+            !minimapTelemetry.engineRunning ? 'top-17' : 'top-5'
+          } ${
+            passengerHud.onboardId !== null
+              ? 'border-[#5ec2e6]/50 bg-[#14191e]/95 text-[#eef6fa]'
+              : 'border-[#73c991]/55 bg-[#141b16]/95 text-[#eef8f0]'
+          }`}
+        >
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            {passengerHud.onboardId !== null ? (
+              <>
+                <div className="text-xs leading-tight">
+                  <span className="font-semibold text-[#7bd3f4]">{passengerHud.onboardName}</span>
+                  <span className="text-[#a4b6c2]"> · {passengerHud.onboardRole}</span>
+                  {passengerHud.dropoffLabel && (
+                    <span className="block text-[11px] text-[#cfdbe3]">
+                      Dropoff: {passengerHud.dropoffLabel}
+                    </span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={onPassengerAction}
+                  className="rounded-md bg-[#5ec2e6] px-2.5 py-1 text-xs font-semibold text-[#0d1921] hover:bg-[#82d3f0] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  Unload (P)
+                </button>
+              </>
+            ) : passengerHud.nearbyWaitingId !== null ? (
+              <>
+                <div className="text-xs leading-tight">
+                  <span className="font-semibold text-[#8fe2aa]">
+                    {passengerHud.nearbyWaitingName} is waving!
+                  </span>
+                  <span className="block text-[11px] text-[#bfd6c5]">
+                    {passengerHud.nearbyWaitingRole} ({passengerHud.nearbyWaitingDist}m away)
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={onPassengerAction}
+                  className="rounded-md bg-[#73c991] px-2.5 py-1 text-xs font-semibold text-[#0e1f14] hover:bg-[#90dca9] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  Accept Passenger (P)
+                </button>
+              </>
+            ) : (
+              <span className="text-xs font-medium text-[#E8C073]">{passengerHud.noticeText}</span>
+            )}
+          </div>
+
+          {passengerHud.coachTip && (
+            <div className="border-t border-white/12 pt-1 text-[11px] leading-snug text-[#f5dba0]">
+              <span className="font-semibold text-[#E8C073]">Mechanic Tip: </span>
+              {passengerHud.coachTip}
+            </div>
+          )}
+
+          {passengerHud.noticeText && passengerHud.onboardId !== null && (
+            <div className="text-[11px] text-[#a5e6ba]">{passengerHud.noticeText}</div>
+          )}
+        </div>
+      )}
+
       <MinimapOverlay
         telemetry={minimapTelemetry}
         rivals={minimapMeta.rivals}
         trainPos={minimapMeta.trainPos}
+        piperPos={minimapMeta.piperPos}
+        waitingPassengers={minimapMeta.waitingPassengers}
+        passengerTarget={minimapMeta.passengerTarget}
         errandTarget={activeErrandTarget}
       />
 

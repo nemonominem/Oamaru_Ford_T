@@ -117,6 +117,60 @@ export const OAMARU_LANDMARKS: Landmark[] = [
   },
 ];
 
+export interface RoadPothole {
+  id: string;
+  x: number;
+  z: number;
+  radius: number;
+  depth: number;
+}
+
+export type ObstructionKind =
+  | 'crate'
+  | 'wool-bales'
+  | 'wheelbarrow'
+  | 'sawhorse'
+  | 'milk-churns'
+  | 'branch';
+
+export interface RoadObstruction {
+  id: string;
+  x: number;
+  z: number;
+  radius: number;
+  yaw: number;
+  kind: ObstructionKind;
+}
+
+export const ROAD_POTHOLES: RoadPothole[] = [
+  { id: 'ph-harbour-1', x: -34, z: 1.8, radius: 1.05, depth: 0.14 },
+  { id: 'ph-harbour-2', x: 4, z: -2.4, radius: 1.15, depth: 0.15 },
+  { id: 'ph-harbour-3', x: 38, z: 1.5, radius: 0.95, depth: 0.13 },
+  { id: 'ph-harbour-4', x: 68, z: -1.9, radius: 1.1, depth: 0.14 },
+  { id: 'ph-harbour-w', x: -84, z: -1.8, radius: 1.1, depth: 0.14 },
+  { id: 'ph-quay-1', x: 96.8, z: 36, radius: 1.15, depth: 0.15 },
+  { id: 'ph-quay-2', x: 93.4, z: 78, radius: 1.2, depth: 0.16 },
+  { id: 'ph-wanbrow-1', x: 42, z: 119.6, radius: 1.25, depth: 0.16 },
+  { id: 'ph-wanbrow-2', x: -12, z: 116.2, radius: 1.1, depth: 0.15 },
+  { id: 'ph-wanbrow-3', x: -82, z: 119.2, radius: 1.25, depth: 0.16 },
+  { id: 'ph-severn-1', x: -150.2, z: 74, radius: 1.15, depth: 0.15 },
+  { id: 'ph-severn-2', x: -153.6, z: 10, radius: 1.2, depth: 0.16 },
+  { id: 'ph-itchen-1', x: -128, z: -69.4, radius: 1.05, depth: 0.14 },
+  { id: 'ph-thames-1', x: -105.8, z: -34, radius: 1.1, depth: 0.15 },
+];
+
+export const ROAD_OBSTRUCTIONS: RoadObstruction[] = [
+  { id: 'obs-crate-harbour', x: -29, z: 4.9, radius: 0.68, yaw: 0.35, kind: 'crate' },
+  { id: 'obs-sawhorse-harbour', x: 18, z: -4.8, radius: 0.85, yaw: 0.12, kind: 'sawhorse' },
+  { id: 'obs-wool-harbour-e', x: 76, z: 0.0, radius: 0.78, yaw: 0.28, kind: 'wool-bales' },
+  { id: 'obs-churns-quay', x: 99.2, z: 48, radius: 0.65, yaw: 0.6, kind: 'milk-churns' },
+  { id: 'obs-wool-wanbrow', x: 56, z: 122.4, radius: 0.82, yaw: -0.22, kind: 'wool-bales' },
+  { id: 'obs-barrow-wanbrow', x: -46, z: 118.0, radius: 0.72, yaw: 0.48, kind: 'wheelbarrow' },
+  { id: 'obs-branch-severn', x: -156.5, z: 46, radius: 0.88, yaw: 0.32, kind: 'branch' },
+  { id: 'obs-crate-itchen', x: -134, z: -63.8, radius: 0.68, yaw: -0.4, kind: 'crate' },
+  { id: 'obs-sawhorse-thames', x: -104.0, z: -16, radius: 0.85, yaw: 0.15, kind: 'sawhorse' },
+];
+
 export const WORLD_COLLIDERS: ColliderBox[] = [
   // Building blocks enclosing the urban circuit cleanly
   { minX: -94, maxX: -36, minZ: -58, maxZ: -11, label: 'North-West Whitestone Block' },
@@ -124,6 +178,11 @@ export const WORLD_COLLIDERS: ColliderBox[] = [
   { minX: -94, maxX: -36, minZ: 11, maxZ: 106, label: 'Criterion & South-West Block' },
   { minX: -12, maxX: 84, minZ: 11, maxZ: 106, label: 'Harbour St South Block' },
   { minX: -142, maxX: -114, minZ: -58, maxZ: 106, label: 'Thames–Severn Civic Block' },
+
+  // Outer perimeter Victorian building terraces
+  { minX: -94, maxX: -36, minZ: -102, maxZ: -77, label: 'Itchen North-West Terrace' },
+  { minX: -12, maxX: 84, minZ: -102, maxZ: -77, label: 'Itchen North-East Terrace' },
+  { minX: -186, maxX: -161, minZ: -58, maxZ: 96, label: 'Severn St West Terrace' },
 
   // Natural Side-Street Blockade Colliders (carts, barrels, barriers & spectators)
   { minX: 103, maxX: 111, minZ: -9, maxZ: 9, label: 'Sumpter Wharf Barricade' },
@@ -146,10 +205,34 @@ function smoothstep(edge0: number, edge1: number, x: number): number {
   return t * t * (3 - 2 * t);
 }
 
+function samplePotholeAt(x: number, z: number): { dip: number; bumpBoost: number; rutBias: number } {
+  for (let i = 0; i < ROAD_POTHOLES.length; i++) {
+    const p = ROAD_POTHOLES[i];
+    const dx = x - p.x;
+    const dz = z - p.z;
+    if (Math.abs(dx) >= p.radius || Math.abs(dz) >= p.radius) continue;
+    const distSq = dx * dx + dz * dz;
+    const rSq = p.radius * p.radius;
+    if (distSq < rSq) {
+      const t = 1 - distSq / rSq;
+      return {
+        dip: p.depth * t * t,
+        bumpBoost: 0.036 * t,
+        rutBias: (dx / p.radius) * 0.24 * t,
+      };
+    }
+  }
+  return { dip: 0, bumpBoost: 0, rutBias: 0 };
+}
+
 /**
  * Computes terrain elevation y(x, z) and surface classification for the extended 1914 Oamaru circuit.
  */
-export function getTerrainHeightAndSurface(x: number, z: number): {
+export function getTerrainHeightAndSurface(
+  x: number,
+  z: number,
+  skipPotholes = false
+): {
   height: number;
   surface: SurfaceType;
   bumpAmplitude: number;
@@ -217,11 +300,12 @@ export function getTerrainHeightAndSurface(x: number, z: number): {
     const distFromCenter = onHarbourSt ? Math.abs(z) / 7.2 : Math.abs(x - 95) / 6.8;
     const crown = (1 - distFromCenter * distFromCenter) * 0.07;
     const settRipple = Math.sin(x * 7.5) * Math.sin(z * 7.5) * 0.011;
+    const hole = skipPotholes ? { dip: 0, bumpBoost: 0, rutBias: 0 } : samplePotholeAt(x, z);
     return {
-      height: baseHeight + crown + settRipple,
+      height: baseHeight + crown + settRipple - hole.dip,
       surface: 'cobbles',
-      bumpAmplitude: 0.024,
-      rutPull: 0,
+      bumpAmplitude: 0.024 + hole.bumpBoost,
+      rutPull: hole.rutBias,
     };
   }
 
@@ -236,11 +320,12 @@ export function getTerrainHeightAndSurface(x: number, z: number): {
     onWansbeckRidge
   ) {
     const gravelMicro = Math.sin(x * 2.1 + z * 1.7) * 0.008;
+    const hole = skipPotholes ? { dip: 0, bumpBoost: 0, rutBias: 0 } : samplePotholeAt(x, z);
     return {
-      height: baseHeight + 0.05 + gravelMicro,
+      height: baseHeight + 0.05 + gravelMicro - hole.dip,
       surface: 'macadam',
-      bumpAmplitude: 0.012,
-      rutPull: 0,
+      bumpAmplitude: 0.012 + hole.bumpBoost,
+      rutPull: hole.rutBias,
     };
   }
 

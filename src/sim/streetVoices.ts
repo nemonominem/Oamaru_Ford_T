@@ -1,4 +1,11 @@
-export type BadDrivingReason = 'impact' | 'speeding' | 'skid' | 'offroad' | 'hornSpam' | 'livestock';
+export type BadDrivingReason =
+  | 'impact'
+  | 'speeding'
+  | 'skid'
+  | 'offroad'
+  | 'hornSpam'
+  | 'livestock'
+  | 'piperHit';
 
 export interface StreetDialogueEvent {
   id: number;
@@ -127,6 +134,24 @@ const SCOLDING_LINES: Record<BadDrivingReason, LineEntry[]> = {
     {
       role: 'Constable',
       text: 'Ease up there, driver! You’re spooking the sheep and setting every collie in town barking!',
+    },
+  ],
+  piperHit: [
+    {
+      role: 'Gentleman',
+      text: 'God gracious! You got him!',
+    },
+    {
+      role: 'Lady',
+      text: 'Good heavens above! You’ve bowled over poor Angus and his bagpipes!',
+    },
+    {
+      role: 'Constable',
+      text: 'God gracious, man! You actually ran down the Scottish piper—fetch Dr. Hargreaves!',
+    },
+    {
+      role: 'Dockworker',
+      text: 'Blimey! You got him! Look at that tartan flying and those drones wheezing!',
     },
   ],
 };

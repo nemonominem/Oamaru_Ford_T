@@ -10,6 +10,7 @@ import { ModelTAudioEngine } from './sim/audio';
 import { computeAmbientTempC, getSeasonClimateInfo, pickLikelyWeather } from './sim/climate';
 import { ActiveErrandState, OAMARU_ERRANDS, loadTrialRecords } from './sim/errands';
 import { createInitialVehicleState, toggleIgnition, triggerHandCrank } from './sim/physics';
+import { PassengerHudState, PassengerSpec } from './sim/passengers';
 import { getTerrainSample } from './sim/terrain';
 import {
   CameraMode,
@@ -71,6 +72,8 @@ export default function App() {
   const wiperOnRef = useRef<boolean>(false);
   const audioRef = useRef<ModelTAudioEngine>(new ModelTAudioEngine());
   const hornTriggerRef = useRef<number>(0);
+  const passengerActionTriggerRef = useRef<number>(0);
+  const resetTriggerRef = useRef<number>(0);
 
   const [telemetry, setTelemetry] = useState<VehicleState>(() => ({
     ...vehicleStateRef.current,
@@ -82,6 +85,21 @@ export default function App() {
   const [muted, setMuted] = useState<boolean>(false);
   const [headlightsOn, setHeadlightsOn] = useState<boolean>(false);
   const [wiperOn, setWiperOn] = useState<boolean>(false);
+  const [passengerHud, setPassengerHud] = useState<PassengerHudState>({
+    onboardId: null,
+    onboardName: null,
+    onboardRole: null,
+    dropoffLabel: null,
+    dropoffX: null,
+    dropoffZ: null,
+    nearbyWaitingId: null,
+    nearbyWaitingName: null,
+    nearbyWaitingRole: null,
+    nearbyWaitingDist: null,
+    waitingPoints: [],
+    coachTip: null,
+    noticeText: null,
+  });
 
   const [errandState, setErrandState] = useState<ActiveErrandState>(() => ({
     errandIndex: 0,
@@ -127,6 +145,7 @@ export default function App() {
     controlsRef.current.handThrottle = fresh.handThrottle;
     controlsRef.current.sparkAdvance = fresh.sparkAdvance;
     controlsRef.current.handbrakePos = 0.5;
+    resetTriggerRef.current += 1;
   }, []);
 
   const handleJumpToBuilding = useCallback((building: HistoricalBuilding) => {
@@ -139,6 +158,22 @@ export default function App() {
     v.vy = 0;
     v.vz = 0;
     v.yaw = building.approachYaw;
+    v.yawRate = 0;
+    v.pitch = 0;
+    v.roll = 0;
+    v.gear = 'N';
+  }, []);
+
+  const handleJumpToPassenger = useCallback((spec: PassengerSpec) => {
+    const terrain = getTerrainSample(spec.approachX, spec.approachZ);
+    const v = vehicleStateRef.current;
+    v.x = spec.approachX;
+    v.z = spec.approachZ;
+    v.y = terrain.height;
+    v.vx = 0;
+    v.vy = 0;
+    v.vz = 0;
+    v.yaw = spec.approachYaw;
     v.yawRate = 0;
     v.pitch = 0;
     v.roll = 0;
@@ -244,6 +279,11 @@ export default function App() {
     audioRef.current.playHorn();
   }, []);
 
+  const handlePassengerAction = useCallback(() => {
+    audioRef.current.init();
+    passengerActionTriggerRef.current += 1;
+  }, []);
+
   const handleToggleMute = useCallback(() => {
     audioRef.current.init();
     setMuted((prev) => {
@@ -334,7 +374,8 @@ export default function App() {
         if (e.code === 'KeyH') {
           hornTriggerRef.current += 1;
           audioRef.current.playHorn();
-        } else if (e.code === 'KeyI') handleToggleIgnition();
+        } else if (e.code === 'KeyP') handlePassengerAction();
+        else if (e.code === 'KeyI') handleToggleIgnition();
         else if (e.code === 'KeyR') handleResetVehicle();
         else if (e.code === 'KeyC') {
           triggerHandCrank(vehicleStateRef.current, controlModeRef.current, controlsRef.current.sparkAdvance);
@@ -384,6 +425,7 @@ export default function App() {
     };
   }, [
     handleCameraChange,
+    handlePassengerAction,
     handleResetVehicle,
     handleToggleHeadlights,
     handleToggleIgnition,
@@ -403,6 +445,11 @@ export default function App() {
         wiperOnRef={wiperOnRef}
         audioRef={audioRef}
         hornTriggerRef={hornTriggerRef}
+        passengerActionTriggerRef={passengerActionTriggerRef}
+        resetTriggerRef={resetTriggerRef}
+        passengerHud={passengerHud}
+        onPassengerHudChange={setPassengerHud}
+        onPassengerAction={handlePassengerAction}
         errandState={errandState}
         errandStateRef={errandStateRef}
         onErrandUpdate={setErrandState}
@@ -418,6 +465,8 @@ export default function App() {
         headlightsOn={headlightsOn}
         wiperOn={wiperOn}
         errandState={errandState}
+        passengerHud={passengerHud}
+        onPassengerAction={handlePassengerAction}
         onCameraChange={handleCameraChange}
         onControlModeChange={handleControlModeChange}
         onWeatherChange={handleWeatherChange}
@@ -433,6 +482,7 @@ export default function App() {
         onToggleIgnition={handleToggleIgnition}
         onResetVehicle={handleResetVehicle}
         onJumpToBuilding={handleJumpToBuilding}
+        onJumpToPassenger={handleJumpToPassenger}
         onCrankEngine={handleCrankEngine}
         onHorn={handleHorn}
         onHandThrottleChange={(v) => {
