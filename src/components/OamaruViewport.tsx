@@ -89,6 +89,7 @@ const _rearWheelPos = new THREE.Vector3();
 const _radCapPos = new THREE.Vector3();
 const _trackDummy = new THREE.Object3D();
 const _segDir = new THREE.Vector3();
+const _shadowBiasVec = new THREE.Vector3();
 
 type CinemaShotKind =
   | 'roadside-pass'
@@ -997,6 +998,7 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
     let lastRecModeInLoop: CameraMode | null = null;
     let lastSavedFilename: string | null = null;
     let lastRecUiPush = 0;
+    let displayMediaStream: MediaStream | null = null;
 
     const updateStandardCameraPose = (
       targetCam: THREE.PerspectiveCamera,
@@ -1064,8 +1066,13 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
     };
 
     const stopRecordingInternal = () => {
-      if (!isRecordingActive && !mediaRecorder) return;
+      if (!isRecordingActive && !mediaRecorder && !displayMediaStream) return;
       isRecordingActive = false;
+      // Stop system audio capture stream (getDisplayMedia)
+      if (displayMediaStream) {
+        displayMediaStream.getTracks().forEach((t) => t.stop());
+        displayMediaStream = null;
+      }
       try {
         if (mediaRecorder && mediaRecorder.state !== 'inactive') {
           mediaRecorder.stop();
@@ -1082,7 +1089,7 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
       }
     };
 
-    const startRecordingInternal = () => {
+    const startRecordingInternal = async () => {
       if (isRecordingActive) return;
       if (typeof MediaRecorder === 'undefined' || typeof recCanvas.captureStream !== 'function' || !recCtx) {
         onRecordingStateRef.current({
@@ -1112,6 +1119,16 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
       const tracks: MediaStreamTrack[] = [...videoStream.getVideoTracks()];
       if (audioStream) {
         audioStream.getAudioTracks().forEach((t) => tracks.push(t));
+      }
+      // Capture system/tab audio so Web Speech API dialogue (speakStreetLine)
+      // and all system sounds are included in the recording, not just Web Audio API nodes.
+      try {
+        const displayStream = await navigator.mediaDevices.getDisplayMedia({ audio: true, video: false });
+        displayStream.getAudioTracks().forEach((t) => tracks.push(t));
+        displayMediaStream = displayStream;
+      } catch {
+        // User denied permission or browser doesn't support system audio capture.
+        // Recording continues with Web Audio API audio only.
       }
       const combinedStream = new MediaStream(tracks);
 
@@ -1778,6 +1795,12 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
         state.y,
         state.z + Math.cos(state.yaw) * shadowLead
       );
+      // Bias shadow ortho box ahead of the camera so cornice and car shadows
+      // read sharper where the player is looking (Pass 1).
+      camera.getWorldDirection(_shadowBiasVec);
+      _shadowBiasVec.multiplyScalar(14); // half of d=28, shift frustum forward
+      sunLight.position.add(_shadowBiasVec);
+      sunLight.target.position.add(_shadowBiasVec);
       _sunDir.set(sunDirX, sunHeight, -32).normalize();
       sky.sunDir.copy(_sunDir);
 
