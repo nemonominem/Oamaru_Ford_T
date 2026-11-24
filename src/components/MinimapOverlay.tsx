@@ -27,7 +27,9 @@ export const MinimapOverlay: React.FC<MinimapOverlayProps> = ({
   passengerTarget = null,
   errandTarget = null,
 }) => {
-  const [closed, setClosed] = useState(false);
+  const [closed, setClosed] = useState(() =>
+    typeof window !== 'undefined' ? window.innerWidth < 768 : false
+  );
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -47,10 +49,11 @@ export const MinimapOverlay: React.FC<MinimapOverlayProps> = ({
         onClick={() => setClosed(false)}
         aria-label="Open circuit map"
         title="Open 1914 Circuit Map (M)"
-        className="fixed top-5 right-6 z-20 flex items-center gap-1.5 rounded-lg border border-white/15 bg-[#161411]/92 px-3 py-1.5 text-xs font-medium text-[#F4EFE6] shadow-lg hover:bg-[#23201b] transition-colors cursor-pointer whitespace-nowrap"
+        className="fixed top-3 right-3 sm:top-5 sm:right-6 z-20 flex min-h-[44px] sm:min-h-0 items-center gap-1.5 rounded-lg border border-white/15 bg-[#161411]/92 px-3 py-1.5 text-xs font-medium text-[#F4EFE6] shadow-lg hover:bg-[#23201b] transition-colors cursor-pointer whitespace-nowrap"
       >
         <MapIcon className="h-3.5 w-3.5 text-[#E8C073]" />
-        <span>Circuit Map</span>
+        <span className="hidden sm:inline">Circuit Map</span>
+        <span className="sm:hidden">Map</span>
       </button>
     );
   }
@@ -108,20 +111,20 @@ export const MinimapOverlay: React.FC<MinimapOverlayProps> = ({
   return (
     <aside
       aria-label="Oamaru Victorian Circuit Minimap"
-      className="fixed top-5 right-6 z-20 w-[214px] rounded-xl border border-white/15 bg-[#161411]/92 p-2.5 shadow-xl"
+      className="fixed top-3 right-3 sm:top-5 sm:right-6 z-25 w-[172px] sm:w-[214px] rounded-xl border border-white/15 bg-[#161411]/92 p-2 sm:p-2.5 shadow-xl"
     >
       <div className="mb-1.5 flex items-center justify-between gap-1 text-[11px] text-[#CFC5B4]">
-        <span className="font-medium text-[#F4EFE6]">1914 Circuit Map</span>
+        <span className="font-medium text-[#F4EFE6] truncate">1914 Map</span>
         <div className="flex items-center gap-1.5">
           <span className="font-mono-tabular text-[#9E9280]">
-            P{telemetry.racePosition} · Lap {telemetry.lapCount}
+            P{telemetry.racePosition} · L{telemetry.lapCount}
           </span>
           <button
             type="button"
             onClick={() => setClosed(true)}
             aria-label="Close circuit map"
             title="Close circuit map (M)"
-            className="rounded p-0.5 text-[#9E9280] hover:bg-white/10 hover:text-white transition-colors cursor-pointer"
+            className="min-h-[32px] min-w-[32px] sm:min-h-0 sm:min-w-0 flex items-center justify-center rounded p-1 text-[#9E9280] hover:bg-white/10 hover:text-white transition-colors cursor-pointer"
           >
             <X className="h-3.5 w-3.5" />
           </button>

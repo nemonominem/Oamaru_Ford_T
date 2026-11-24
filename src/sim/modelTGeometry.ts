@@ -1,4 +1,13 @@
 import * as THREE from 'three';
+import { KiwiDriverRig, createCharacterPool } from './characterModels';
+
+export type ModelTInstrumentKey =
+  | 'ignition'
+  | 'sparkThrottle'
+  | 'crank'
+  | 'pedals'
+  | 'handbrake'
+  | 'gauges';
 
 export interface ModelTRig {
   root: THREE.Group;
@@ -7,12 +16,15 @@ export interface ModelTRig {
   wheelSpinGroups: [THREE.Group, THREE.Group, THREE.Group, THREE.Group];
   frontKnuckles: [THREE.Group, THREE.Group]; // FL, FR steering pivots
   steeringWheel: THREE.Group;
+  sparkLeverPivot: THREE.Group;
+  throttleLeverPivot: THREE.Group;
   handCrank: THREE.Group;
   handbrakeLever: THREE.Group;
   speedometerNeedle: THREE.Group;
   ammeterNeedle: THREE.Group;
   wiperPivot: THREE.Group;
   fenderPaint: THREE.MeshPhysicalMaterial;
+  driverRig: KiwiDriverRig;
   pedals: {
     low: THREE.Mesh;
     reverse: THREE.Mesh;
@@ -20,10 +32,16 @@ export interface ModelTRig {
   };
   headlights: [THREE.SpotLight, THREE.SpotLight];
   headlightBulbs: [THREE.Mesh, THREE.Mesh];
+  headlightCones: [THREE.Mesh, THREE.Mesh];
+  coolingFan: THREE.Group;
+  setHighlightedInstrument: (key: ModelTInstrumentKey | null, elapsed: number) => void;
   dispose: () => void;
 }
 
-export function buildFordModelT(isSoftwareGl: boolean): ModelTRig {
+export function buildFordModelT(
+  isSoftwareGl: boolean,
+  radiatorHoneycombTex?: THREE.CanvasTexture
+): ModelTRig {
   const disposables: { dispose: () => void }[] = [];
   const track = <T extends { dispose: () => void }>(item: T): T => {
     disposables.push(item);
@@ -70,6 +88,16 @@ export function buildFordModelT(isSoftwareGl: boolean): ModelTRig {
       metalness: 0.92,
     })
   );
+
+  // Per-instrument highlightable clones so pulsing an instrument never glows the whole chassis
+  const instrumentHighlightMats: Record<ModelTInstrumentKey, THREE.MeshStandardMaterial> = {
+    ignition: track(polishedBrass.clone()),
+    sparkThrottle: track(polishedBrass.clone()),
+    crank: track(polishedBrass.clone()),
+    pedals: track(chassisSteel.clone()),
+    handbrake: track(polishedBrass.clone()),
+    gauges: track(polishedBrass.clone()),
+  };
 
   const darkRubber = track(
     new THREE.MeshStandardMaterial({
@@ -153,7 +181,7 @@ export function buildFordModelT(isSoftwareGl: boolean): ModelTRig {
   diffMesh.position.set(0, 0.38, -1.27);
   chassisGroup.add(diffMesh);
 
-  // 2. Brass Radiator & Louvered Engine Hood
+  // 2. Brass Radiator & Louvered Engine Hood (True Hollow Bezel Frame -> Zero Z-Fighting)
   const radShellShape = new THREE.Shape();
   radShellShape.moveTo(-0.33, 0);
   radShellShape.lineTo(0.33, 0);
@@ -161,6 +189,15 @@ export function buildFordModelT(isSoftwareGl: boolean): ModelTRig {
   radShellShape.quadraticCurveTo(0.33, 0.72, 0, 0.74);
   radShellShape.quadraticCurveTo(-0.33, 0.72, -0.33, 0.56);
   radShellShape.closePath();
+
+  const radHole = new THREE.Path();
+  radHole.moveTo(-0.255, 0.055);
+  radHole.lineTo(-0.255, 0.53);
+  radHole.quadraticCurveTo(-0.255, 0.625, 0, 0.635);
+  radHole.quadraticCurveTo(0.255, 0.625, 0.255, 0.53);
+  radHole.lineTo(0.255, 0.055);
+  radHole.closePath();
+  radShellShape.holes.push(radHole);
 
   const radGeo = track(
     new THREE.ExtrudeGeometry(radShellShape, {
@@ -176,13 +213,38 @@ export function buildFordModelT(isSoftwareGl: boolean): ModelTRig {
   radiatorShell.castShadow = true;
   chassisGroup.add(radiatorShell);
 
-  // Radiator dark honeycomb core inset
+  // Radiator dark honeycomb core cleanly recessed inside the hollow brass bezel
   const coreMesh = new THREE.Mesh(
-    track(new THREE.BoxGeometry(0.54, 0.56, 0.04)),
-    track(new THREE.MeshStandardMaterial({ color: 0x1c1814, roughness: 0.85, metalness: 0.4 }))
+    track(new THREE.BoxGeometry(0.55, 0.59, 0.05)),
+    track(
+      new THREE.MeshStandardMaterial({
+        color: radiatorHoneycombTex ? 0xffffff : 0x1c1814,
+        map: radiatorHoneycombTex ?? null,
+        roughness: 0.78,
+        metalness: 0.42,
+      })
+    )
   );
-  coreMesh.position.set(0, 0.78, 1.365);
+  coreMesh.position.set(0, 0.785, 1.325);
   chassisGroup.add(coreMesh);
+
+  // 4-blade brass cooling fan visible behind the front honeycomb grille aperture
+  const coolingFan = new THREE.Group();
+  coolingFan.position.set(0, 0.785, 1.265);
+  const fanHub = new THREE.Mesh(track(new THREE.CylinderGeometry(0.036, 0.036, 0.03, 12)), polishedBrass);
+  fanHub.rotation.x = Math.PI / 2;
+  coolingFan.add(fanHub);
+  const bladeGeo = track(new THREE.BoxGeometry(0.065, 0.16, 0.008));
+  for (let b = 0; b < 4; b++) {
+    const arm = new THREE.Group();
+    arm.rotation.z = (b * Math.PI) / 2;
+    const blade = new THREE.Mesh(bladeGeo, polishedBrass);
+    blade.position.y = 0.105;
+    blade.rotation.y = 0.36;
+    arm.add(blade);
+    coolingFan.add(arm);
+  }
+  chassisGroup.add(coolingFan);
 
   // Brass Radiator Cap
   const radCap = new THREE.Mesh(track(new THREE.CylinderGeometry(0.036, 0.04, 0.05, 14)), polishedBrass);
@@ -194,7 +256,10 @@ export function buildFordModelT(isSoftwareGl: boolean): ModelTRig {
   handCrank.position.set(0, 0.43, 1.40);
   const crankArm = new THREE.Mesh(track(new THREE.BoxGeometry(0.025, 0.16, 0.025)), chassisSteel);
   crankArm.position.set(0, -0.07, 0.03);
-  const crankHandle = new THREE.Mesh(track(new THREE.CylinderGeometry(0.016, 0.016, 0.08, 10)), polishedBrass);
+  const crankHandle = new THREE.Mesh(
+    track(new THREE.CylinderGeometry(0.016, 0.016, 0.08, 10)),
+    instrumentHighlightMats.crank
+  );
   crankHandle.rotation.x = Math.PI / 2;
   crankHandle.position.set(0, -0.14, 0.07);
   handCrank.add(crankArm, crankHandle);
@@ -239,9 +304,17 @@ export function buildFordModelT(isSoftwareGl: boolean): ModelTRig {
   coilBox.position.set(0.14, 0.85, 0.13);
   chassisGroup.add(coilBox);
 
-  const switchPlate = new THREE.Mesh(track(new THREE.BoxGeometry(0.08, 0.09, 0.02)), polishedBrass);
+  const switchPlate = new THREE.Mesh(
+    track(new THREE.BoxGeometry(0.08, 0.09, 0.02)),
+    instrumentHighlightMats.ignition
+  );
   switchPlate.position.set(0.14, 0.85, 0.075);
-  chassisGroup.add(switchPlate);
+  const switchKey = new THREE.Mesh(
+    track(new THREE.BoxGeometry(0.014, 0.036, 0.022)),
+    instrumentHighlightMats.ignition
+  );
+  switchKey.position.set(0.14, 0.85, 0.062);
+  chassisGroup.add(switchPlate, switchKey);
 
   // Brass Stewart-Warner 1914 Speedometer on Dashboard facing Cockpit Driver (-Z)
   const dialCanvas = document.createElement('canvas');
@@ -276,7 +349,10 @@ export function buildFordModelT(isSoftwareGl: boolean): ModelTRig {
   const dialTex = track(new THREE.CanvasTexture(dialCanvas));
   dialTex.colorSpace = THREE.SRGBColorSpace;
 
-  const speedoBezel = new THREE.Mesh(track(new THREE.CylinderGeometry(0.064, 0.068, 0.032, 20)), polishedBrass);
+  const speedoBezel = new THREE.Mesh(
+    track(new THREE.CylinderGeometry(0.064, 0.068, 0.032, 20)),
+    instrumentHighlightMats.gauges
+  );
   speedoBezel.rotation.x = Math.PI / 2;
   speedoBezel.position.set(-0.08, 0.87, 0.144);
   const speedoFace = new THREE.Mesh(
@@ -296,7 +372,10 @@ export function buildFordModelT(isSoftwareGl: boolean): ModelTRig {
   chassisGroup.add(speedoBezel, speedoFace, speedometerNeedle);
 
   // Brass Magneto Ammeter Gauge beside Speedometer
-  const ammBezel = new THREE.Mesh(track(new THREE.CylinderGeometry(0.038, 0.04, 0.028, 16)), polishedBrass);
+  const ammBezel = new THREE.Mesh(
+    track(new THREE.CylinderGeometry(0.038, 0.04, 0.028, 16)),
+    instrumentHighlightMats.gauges
+  );
   ammBezel.rotation.x = Math.PI / 2;
   ammBezel.position.set(-0.24, 0.87, 0.144);
   const ammFace = new THREE.Mesh(
@@ -467,6 +546,9 @@ export function buildFordModelT(isSoftwareGl: boolean): ModelTRig {
     })
   );
   const headlightBulbs: THREE.Mesh[] = [];
+  const headlightCones: THREE.Mesh[] = [];
+  const coneGeo = track(new THREE.ConeGeometry(0.95, 11.5, 16, 1, true));
+  coneGeo.rotateX(-Math.PI / 2);
 
   [-0.36, 0.36].forEach((hx, idx) => {
     const bucket = new THREE.Mesh(track(new THREE.CylinderGeometry(0.11, 0.08, 0.14, 16)), polishedBrass);
@@ -479,6 +561,23 @@ export function buildFordModelT(isSoftwareGl: boolean): ModelTRig {
     lens.position.set(hx, 0.88, 1.452);
     chassisGroup.add(lens);
     headlightBulbs.push(lens);
+
+    const coneMat = track(
+      new THREE.MeshBasicMaterial({
+        color: 0xffeab8,
+        transparent: true,
+        opacity: 0,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      })
+    );
+    const cone = new THREE.Mesh(coneGeo, coneMat);
+    cone.position.set(hx, 0.85, 1.46 + 5.75);
+    cone.rotation.x = 0.05;
+    cone.visible = false;
+    chassisGroup.add(cone);
+    headlightCones.push(cone);
 
     const spot = headlights[idx];
     spot.position.set(hx, 0.88, 1.46);
@@ -514,25 +613,66 @@ export function buildFordModelT(isSoftwareGl: boolean): ModelTRig {
   }
   chassisGroup.add(steeringWheel);
 
+  // Brass Steering Column Quadrant + Spark Advance (Left/+X) & Hand Throttle (Right/-X) Levers
+  const quadrantGroup = new THREE.Group();
+  quadrantGroup.position.set(-0.23, 1.075, -0.152);
+  quadrantGroup.rotation.x = -0.68;
+  const quadrantArc = new THREE.Mesh(
+    track(new THREE.TorusGeometry(0.085, 0.008, 6, 18, Math.PI)),
+    instrumentHighlightMats.sparkThrottle
+  );
+  quadrantArc.rotation.x = Math.PI / 2;
+  quadrantGroup.add(quadrantArc);
+
+  const leverRodGeo = track(new THREE.CylinderGeometry(0.0055, 0.0065, 0.135, 8));
+  const leverKnobGeo = track(new THREE.SphereGeometry(0.014, 8, 6));
+
+  const sparkLeverPivot = new THREE.Group();
+  sparkLeverPivot.position.set(0.014, -0.012, 0);
+  const sparkRod = new THREE.Mesh(leverRodGeo, instrumentHighlightMats.sparkThrottle);
+  sparkRod.rotation.z = -Math.PI / 2;
+  sparkRod.position.set(0.068, 0, 0);
+  const sparkKnob = new THREE.Mesh(leverKnobGeo, darkRubber);
+  sparkKnob.position.set(0.138, 0, 0);
+  sparkLeverPivot.add(sparkRod, sparkKnob);
+
+  const throttleLeverPivot = new THREE.Group();
+  throttleLeverPivot.position.set(-0.014, -0.012, 0);
+  const throttleRod = new THREE.Mesh(leverRodGeo, instrumentHighlightMats.sparkThrottle);
+  throttleRod.rotation.z = Math.PI / 2;
+  throttleRod.position.set(-0.068, 0, 0);
+  const throttleKnob = new THREE.Mesh(leverKnobGeo, darkRubber);
+  throttleKnob.position.set(-0.138, 0, 0);
+  throttleLeverPivot.add(throttleRod, throttleKnob);
+
+  quadrantGroup.add(sparkLeverPivot, throttleLeverPivot);
+  chassisGroup.add(quadrantGroup);
+
   // 3 Floor Pedals (C = Low, R = Reverse, B = Brake)
   const pedalGeo = track(new THREE.BoxGeometry(0.06, 0.14, 0.025));
-  const pedalLow = new THREE.Mesh(pedalGeo, chassisSteel);
+  const pedalLow = new THREE.Mesh(pedalGeo, instrumentHighlightMats.pedals);
   pedalLow.position.set(-0.14, 0.56, 0.06);
   pedalLow.rotation.x = -0.35;
-  const pedalReverse = new THREE.Mesh(pedalGeo, chassisSteel);
+  const pedalReverse = new THREE.Mesh(pedalGeo, instrumentHighlightMats.pedals);
   pedalReverse.position.set(-0.23, 0.56, 0.06);
   pedalReverse.rotation.x = -0.35;
-  const pedalBrake = new THREE.Mesh(pedalGeo, chassisSteel);
+  const pedalBrake = new THREE.Mesh(pedalGeo, instrumentHighlightMats.pedals);
   pedalBrake.position.set(-0.32, 0.56, 0.06);
   pedalBrake.rotation.x = -0.35;
   chassisGroup.add(pedalLow, pedalReverse, pedalBrake);
 
-  // Left-side / outer Handbrake & Clutch Lever
+  // Outer Handbrake & Clutch Lever
   const handbrakeLever = new THREE.Group();
   handbrakeLever.position.set(-0.43, 0.50, -0.05);
-  const hbShaft = new THREE.Mesh(track(new THREE.CylinderGeometry(0.014, 0.016, 0.46, 8)), chassisSteel);
+  const hbShaft = new THREE.Mesh(
+    track(new THREE.CylinderGeometry(0.014, 0.016, 0.46, 8)),
+    chassisSteel
+  );
   hbShaft.position.set(0, 0.22, 0);
-  const hbGrip = new THREE.Mesh(track(new THREE.CylinderGeometry(0.022, 0.022, 0.08, 10)), polishedBrass);
+  const hbGrip = new THREE.Mesh(
+    track(new THREE.CylinderGeometry(0.022, 0.022, 0.08, 10)),
+    instrumentHighlightMats.handbrake
+  );
   hbGrip.position.set(0, 0.45, 0);
   handbrakeLever.add(hbShaft, hbGrip);
   chassisGroup.add(handbrakeLever);
@@ -597,6 +737,26 @@ export function buildFordModelT(isSoftwareGl: boolean): ModelTRig {
     spinGroup.add(cap);
   });
 
+  // 10. 1914 Kiwi Farmer Driver (Right-Hand Drive, Steering-Linked Hands)
+  const driverPool = track(createCharacterPool());
+  const driverRig = driverPool.buildKiwiFarmerDriver(chassisGroup, steeringWheel);
+
+  const setHighlightedInstrument = (key: ModelTInstrumentKey | null, elapsed: number) => {
+    const pulse = 0.55 + Math.sin(elapsed * 5.2) * 0.38;
+    const keys: ModelTInstrumentKey[] = ['ignition', 'sparkThrottle', 'crank', 'pedals', 'handbrake', 'gauges'];
+    for (let i = 0; i < keys.length; i++) {
+      const k = keys[i];
+      const mat = instrumentHighlightMats[k];
+      if (k === key) {
+        mat.emissive.setHex(0xe8b444);
+        mat.emissiveIntensity = pulse;
+      } else {
+        mat.emissive.setHex(0x000000);
+        mat.emissiveIntensity = 0;
+      }
+    }
+  };
+
   return {
     root,
     chassisGroup,
@@ -604,12 +764,15 @@ export function buildFordModelT(isSoftwareGl: boolean): ModelTRig {
     wheelSpinGroups: wheelSpinGroups as [THREE.Group, THREE.Group, THREE.Group, THREE.Group],
     frontKnuckles: frontKnuckles as [THREE.Group, THREE.Group],
     steeringWheel,
+    sparkLeverPivot,
+    throttleLeverPivot,
     handCrank,
     handbrakeLever,
     speedometerNeedle,
     ammeterNeedle,
     wiperPivot,
     fenderPaint,
+    driverRig,
     pedals: {
       low: pedalLow,
       reverse: pedalReverse,
@@ -617,6 +780,9 @@ export function buildFordModelT(isSoftwareGl: boolean): ModelTRig {
     },
     headlights,
     headlightBulbs: headlightBulbs as [THREE.Mesh, THREE.Mesh],
+    headlightCones: headlightCones as [THREE.Mesh, THREE.Mesh],
+    coolingFan,
+    setHighlightedInstrument,
     dispose: () => {
       disposables.forEach((d) => d.dispose());
     },

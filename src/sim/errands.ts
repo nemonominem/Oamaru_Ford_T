@@ -73,6 +73,23 @@ export const OAMARU_ERRANDS: ChauffeurErrand[] = [
     },
     rewardNote: 'Wheat sample lodged with the Magistrate!',
   },
+  {
+    id: 'lighthouse-oil',
+    title: 'Breakwater Lamp Oil Run',
+    pickup: {
+      label: 'Sumpter Produce & Oil Store',
+      x: 49,
+      z: 0,
+      prompt: 'Collect kerosene tins for the Cape Wanbrow lighthouse outside Sumpter Produce.',
+    },
+    dropoff: {
+      label: 'Cape Wanbrow Lighthouse',
+      x: 42,
+      z: 196,
+      prompt: 'Climb the 12% Cape Wanbrow grade in Low gear to reach the Summit Lighthouse.',
+    },
+    rewardNote: 'Lighthouse keeper lit the beacon right before dusk!',
+  },
 ];
 
 const STORAGE_KEY = 'oamaru_1914_records_v1';

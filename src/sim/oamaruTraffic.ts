@@ -3,9 +3,15 @@ import {
   CIRCUIT_LOOP_POINTS,
   ROAD_OBSTRUCTIONS,
   SIDE_STREET_BLOCKADES,
+  SPEED_TRAP_ZONE,
   WORLD_COLLIDERS,
   getTerrainHeightAndSurface,
 } from './terrain';
+import {
+  ArticulatedHumanRig,
+  HumanPreset,
+  createCharacterPool,
+} from './characterModels';
 import { SurfaceType } from './types';
 
 export interface DynamicObstacle {
@@ -64,6 +70,7 @@ interface IdleSpectator {
   group: THREE.Group;
   head: THREE.Object3D;
   arms: THREE.Object3D[];
+  elbows: THREE.Object3D[];
   phase: number;
   mode: 'cheering' | 'discussing' | 'watching';
 }
@@ -72,8 +79,12 @@ interface WalkingPedestrian {
   group: THREE.Group;
   leftLeg: THREE.Object3D;
   rightLeg: THREE.Object3D;
+  leftKnee: THREE.Object3D;
+  rightKnee: THREE.Object3D;
   leftArm: THREE.Object3D;
   rightArm: THREE.Object3D;
+  leftElbow: THREE.Object3D;
+  rightElbow: THREE.Object3D;
   x1: number;
   z1: number;
   x2: number;
@@ -100,6 +111,7 @@ interface ReactiveDog {
   head: THREE.Object3D;
   tail: THREE.Object3D;
   legs: THREE.Object3D[];
+  knees: THREE.Object3D[];
   homeX: number;
   homeZ: number;
   homeYaw: number;
@@ -119,6 +131,7 @@ interface ReactiveSheep {
   head: THREE.Object3D;
   tail: THREE.Object3D;
   legs: THREE.Object3D[];
+  knees: THREE.Object3D[];
   homeX: number;
   homeZ: number;
   x: number;
@@ -145,11 +158,13 @@ interface MovingVintageCar {
   laneOffset: number;
   x: number;
   z: number;
+  yaw: number;
 }
 
 interface MovingHorseDray {
   group: THREE.Group;
   horseLegs: THREE.Object3D[];
+  horseKnees: THREE.Object3D[];
   cartWheels: THREE.Object3D[];
   head: THREE.Object3D;
   tail: THREE.Object3D;
@@ -158,6 +173,19 @@ interface MovingHorseDray {
   laneOffset: number;
   x: number;
   z: number;
+}
+
+interface MovingCyclist {
+  group: THREE.Group;
+  wheels: THREE.Object3D[];
+  leftLeg: THREE.Object3D;
+  rightLeg: THREE.Object3D;
+  leftKnee: THREE.Object3D;
+  rightKnee: THREE.Object3D;
+  progress: number;
+  speedMps: number;
+  laneOffset: number;
+  phase: number;
 }
 
 interface Seagull {
@@ -183,6 +211,7 @@ export interface OamaruTrafficHandle {
   ) => void;
   getObstacles: () => DynamicObstacle[];
   getRivalMapPoints: () => { x: number; z: number }[];
+  getRivalCarStates: () => { x: number; z: number; yaw: number }[];
   getPiperMapPoint: () => { x: number; z: number; down: boolean };
   getRacePosition: (px: number, pz: number, playerLap: number) => number;
   getSpatialAudioHints: (
@@ -246,28 +275,9 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
   };
 
   const group = new THREE.Group();
+  const charPool = track(createCharacterPool());
 
-  // Rich Period Fabric & Material Palette
-  const darkWoolMat = track(new THREE.MeshStandardMaterial({ color: 0x242321, roughness: 0.85 }));
-  const charcoalMat = track(new THREE.MeshStandardMaterial({ color: 0x363638, roughness: 0.86 }));
-  const brownTweedMat = track(new THREE.MeshStandardMaterial({ color: 0x5c4b39, roughness: 0.88 }));
-  const oliveTweedMat = track(new THREE.MeshStandardMaterial({ color: 0x4b533c, roughness: 0.88 }));
-  const navyCoatMat = track(new THREE.MeshStandardMaterial({ color: 0x202d3d, roughness: 0.85 }));
-  const creamBlouseMat = track(new THREE.MeshStandardMaterial({ color: 0xebe3d0, roughness: 0.82 }));
-  const mustardShawlMat = track(new THREE.MeshStandardMaterial({ color: 0xb68b43, roughness: 0.84 }));
-  const burgundySkirtMat = track(new THREE.MeshStandardMaterial({ color: 0x5e2429, roughness: 0.86 }));
-  const slateSkirtMat = track(new THREE.MeshStandardMaterial({ color: 0x364452, roughness: 0.86 }));
-  const tealDressMat = track(new THREE.MeshStandardMaterial({ color: 0x2d4e4f, roughness: 0.85 }));
-  const leatherBootMat = track(new THREE.MeshStandardMaterial({ color: 0x1a1411, roughness: 0.65 }));
-  const skinMat = track(new THREE.MeshStandardMaterial({ color: 0xdcb89a, roughness: 0.72 }));
-  const hairBrownMat = track(new THREE.MeshStandardMaterial({ color: 0x3d281c, roughness: 0.88 }));
-  const strawHatMat = track(new THREE.MeshStandardMaterial({ color: 0xd7c18a, roughness: 0.82 }));
-
-  const bayHorseMat = track(new THREE.MeshStandardMaterial({ color: 0x5b341f, roughness: 0.76 }));
-  const chestnutHorseMat = track(new THREE.MeshStandardMaterial({ color: 0x804728, roughness: 0.76 }));
-  const dappleGreyMat = track(new THREE.MeshStandardMaterial({ color: 0x9b9a95, roughness: 0.78 }));
-  const maneMat = track(new THREE.MeshStandardMaterial({ color: 0x1d1713, roughness: 0.9 }));
-  const harnessLeatherMat = track(new THREE.MeshStandardMaterial({ color: 0x2b1d14, roughness: 0.6 }));
+  // Period Vehicle, Cart & Bird Materials
   const brassMat = track(new THREE.MeshStandardMaterial({ color: 0xd4aa4f, roughness: 0.28, metalness: 0.88 }));
   const timberCartMat = track(new THREE.MeshStandardMaterial({ color: 0x6c4c2f, roughness: 0.82 }));
   const burlapMat = track(new THREE.MeshStandardMaterial({ color: 0xa68f68, roughness: 0.95 }));
@@ -278,10 +288,10 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
   const glassMat = track(new THREE.MeshStandardMaterial({ color: 0xa8c2cf, roughness: 0.15, metalness: 0.25, transparent: true, opacity: 0.55 }));
   const leatherSeatMat = track(new THREE.MeshStandardMaterial({ color: 0x3d2318, roughness: 0.68 }));
 
-  const collieMat = track(new THREE.MeshStandardMaterial({ color: 0x8f5d32, roughness: 0.85 }));
-  const collieWhiteMat = track(new THREE.MeshStandardMaterial({ color: 0xf1ebe0, roughness: 0.85 }));
-  const sheepWoolMat = track(new THREE.MeshStandardMaterial({ color: 0xe7dfd0, roughness: 0.96 }));
-  const sheepFaceMat = track(new THREE.MeshStandardMaterial({ color: 0x2d2825, roughness: 0.85 }));
+  const bayHorseHex = 0x5b341f;
+  const chestnutHorseHex = 0x804728;
+  const dappleGreyHex = 0x9b9a95;
+
   const gullWhiteMat = track(new THREE.MeshStandardMaterial({ color: 0xf2f0eb, roughness: 0.72 }));
   const gullTipMat = track(new THREE.MeshStandardMaterial({ color: 0x454c54, roughness: 0.75 }));
   const beakMat = track(new THREE.MeshStandardMaterial({ color: 0xd98c2b, roughness: 0.6 }));
@@ -294,6 +304,7 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
   const crowdClusters: CrowdCluster[] = [];
   const movingCars: MovingVintageCar[] = [];
   const movingDrays: MovingHorseDray[] = [];
+  const movingCyclists: MovingCyclist[] = [];
   const obstacles: DynamicObstacle[] = [];
   let latestDogBarkIntensity = 0;
   let latestDogX = 0;
@@ -304,360 +315,23 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
   let latestSheepZ = 100;
   let latestHorseStartle = 0;
 
-  // Shared high-definition geometries
-  const headGeo = track(new THREE.SphereGeometry(0.115, 12, 10));
-  const neckGeo = track(new THREE.CylinderGeometry(0.055, 0.065, 0.1, 8));
-  const noseGeo = track(new THREE.BoxGeometry(0.032, 0.04, 0.045));
-  const handGeo = track(new THREE.SphereGeometry(0.038, 8, 6));
-  const bootGeo = track(new THREE.BoxGeometry(0.085, 0.07, 0.17));
-
   // ---------------------------------------------------------------------------
-  // High-Definition Edwardian Citizen Builder
+  // Articulated Edwardian Citizen Wrapper
   // ---------------------------------------------------------------------------
-  type CitizenStyle = 'gentleman' | 'lady' | 'worker' | 'constable' | 'newsboy';
+  type CitizenStyle = Extract<HumanPreset, 'gentleman' | 'lady' | 'worker' | 'constable' | 'newsboy'>;
 
-  const createPedestrian = (style: CitizenStyle, variantIdx: number) => {
-    const pGroup = new THREE.Group();
-    const scale = style === 'newsboy' ? 0.82 : 0.96 + (variantIdx % 3) * 0.035;
-    pGroup.scale.setScalar(scale);
-
-    // Head + Neck + Facial definition
-    const headGroup = new THREE.Group();
-    headGroup.position.set(0, 1.54, 0);
-
-    const neck = new THREE.Mesh(neckGeo, skinMat);
-    neck.position.set(0, -0.06, 0);
-    const head = new THREE.Mesh(headGeo, skinMat);
-    head.position.set(0, 0.05, 0);
-    head.castShadow = true;
-    const nose = new THREE.Mesh(noseGeo, skinMat);
-    nose.position.set(0, 0.04, 0.11);
-    headGroup.add(neck, head, nose);
-
-    // Period hats & hair
-    if (style === 'gentleman') {
-      const coatChoices = [darkWoolMat, charcoalMat, brownTweedMat];
-      const coatMat = coatChoices[variantIdx % coatChoices.length];
-      const hatMat = variantIdx % 2 === 0 ? darkWoolMat : brownTweedMat;
-
-      if (variantIdx % 3 === 0) {
-        // Tall Edwardian Top Hat
-        const crown = new THREE.Mesh(track(new THREE.CylinderGeometry(0.105, 0.11, 0.17, 12)), hatMat);
-        crown.position.set(0, 0.19, 0);
-        const brim = new THREE.Mesh(track(new THREE.CylinderGeometry(0.16, 0.16, 0.018, 14)), hatMat);
-        brim.position.set(0, 0.12, 0);
-        headGroup.add(crown, brim);
-      } else {
-        // Bowler / Boater Hat
-        const crown = new THREE.Mesh(track(new THREE.SphereGeometry(0.118, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.58)), hatMat);
-        crown.position.set(0, 0.11, 0);
-        const brim = new THREE.Mesh(track(new THREE.CylinderGeometry(0.165, 0.165, 0.018, 14)), hatMat);
-        brim.position.set(0, 0.115, 0);
-        headGroup.add(crown, brim);
-      }
-      // Mustache
-      const stache = new THREE.Mesh(track(new THREE.BoxGeometry(0.08, 0.022, 0.025)), hairBrownMat);
-      stache.position.set(0, 0.015, 0.11);
-      headGroup.add(stache);
-
-      // Tailored Waistcoat + Jacket + Lapels + Coat-tails
-      const jacket = new THREE.Mesh(track(new THREE.BoxGeometry(0.36, 0.48, 0.21)), coatMat);
-      jacket.position.set(0, 1.24, 0);
-      jacket.castShadow = true;
-      const vest = new THREE.Mesh(track(new THREE.BoxGeometry(0.16, 0.34, 0.225)), creamBlouseMat);
-      vest.position.set(0, 1.26, 0.01);
-      const tie = new THREE.Mesh(track(new THREE.BoxGeometry(0.04, 0.24, 0.23)), burgundySkirtMat);
-      tie.position.set(0, 1.29, 0.01);
-      const coattail = new THREE.Mesh(track(new THREE.BoxGeometry(0.35, 0.26, 0.18)), coatMat);
-      coattail.position.set(0, 0.91, -0.02);
-      pGroup.add(jacket, vest, tie, coattail);
-
-      // Jointed Legs + Boots
-      const legMat = variantIdx % 2 === 0 ? charcoalMat : brownTweedMat;
-      const legPivots: THREE.Group[] = [];
-      [-0.095, 0.095].forEach((lx) => {
-        const lPivot = new THREE.Group();
-        lPivot.position.set(lx, 0.94, 0);
-        const thigh = new THREE.Mesh(track(new THREE.CylinderGeometry(0.072, 0.056, 0.84, 8)), legMat);
-        thigh.position.set(0, -0.44, 0);
-        thigh.castShadow = true;
-        const boot = new THREE.Mesh(bootGeo, leatherBootMat);
-        boot.position.set(0, -0.88, 0.035);
-        lPivot.add(thigh, boot);
-        pGroup.add(lPivot);
-        legPivots.push(lPivot);
-      });
-
-      const armPivots: THREE.Group[] = [];
-      [-0.225, 0.225].forEach((ax, ai) => {
-        const aPivot = new THREE.Group();
-        aPivot.position.set(ax, 1.43, 0);
-        const sleeve = new THREE.Mesh(track(new THREE.CylinderGeometry(0.054, 0.042, 0.52, 8)), coatMat);
-        sleeve.position.set(0, -0.25, 0);
-        sleeve.castShadow = true;
-        const hand = new THREE.Mesh(handGeo, skinMat);
-        hand.position.set(0, -0.52, 0);
-        aPivot.add(sleeve, hand);
-        if (ai === 1 && variantIdx % 2 === 0) {
-          // Walking cane
-          const cane = new THREE.Mesh(track(new THREE.CylinderGeometry(0.014, 0.011, 0.88, 6)), timberCartMat);
-          cane.position.set(0, -0.88, 0.1);
-          cane.rotation.x = 0.14;
-          aPivot.add(cane);
-        }
-        pGroup.add(aPivot);
-        armPivots.push(aPivot);
-      });
-
-      pGroup.add(headGroup);
-      return { pGroup, head: headGroup, arms: armPivots, legs: legPivots };
-    }
-
-    if (style === 'lady') {
-      const dressChoices = [burgundySkirtMat, slateSkirtMat, tealDressMat, navyCoatMat];
-      const skirtMat = dressChoices[variantIdx % dressChoices.length];
-      const topMat = variantIdx % 2 === 0 ? creamBlouseMat : skirtMat;
-      const hatMat = variantIdx % 2 === 0 ? strawHatMat : burgundySkirtMat;
-
-      // Hair bun + Wide Edwardian floral hat
-      const hairBun = new THREE.Mesh(track(new THREE.SphereGeometry(0.065, 8, 6)), hairBrownMat);
-      hairBun.position.set(0, 0.04, -0.11);
-      const hatBrim = new THREE.Mesh(track(new THREE.CylinderGeometry(0.24, 0.25, 0.024, 14)), hatMat);
-      hatBrim.position.set(0, 0.13, 0);
-      hatBrim.rotation.x = -0.08;
-      const hatCrown = new THREE.Mesh(track(new THREE.CylinderGeometry(0.11, 0.13, 0.08, 12)), creamBlouseMat);
-      hatCrown.position.set(0, 0.175, 0);
-      const hatRibbon = new THREE.Mesh(track(new THREE.CylinderGeometry(0.125, 0.125, 0.025, 12)), skirtMat);
-      hatRibbon.position.set(0, 0.15, 0);
-      headGroup.add(hairBun, hatBrim, hatCrown, hatRibbon);
-
-      // Fitted Bodice + Shawl Collar + A-Line Edwardian Skirt + Hem Flounce
-      const bodice = new THREE.Mesh(track(new THREE.BoxGeometry(0.31, 0.44, 0.19)), topMat);
-      bodice.position.set(0, 1.24, 0);
-      bodice.castShadow = true;
-      const waistBelt = new THREE.Mesh(track(new THREE.CylinderGeometry(0.145, 0.155, 0.07, 10)), darkWoolMat);
-      waistBelt.position.set(0, 1.02, 0);
-      const skirtUpper = new THREE.Mesh(track(new THREE.CylinderGeometry(0.155, 0.28, 0.56, 12)), skirtMat);
-      skirtUpper.position.set(0, 0.72, 0);
-      skirtUpper.castShadow = true;
-      const skirtFlounce = new THREE.Mesh(track(new THREE.CylinderGeometry(0.275, 0.34, 0.36, 12)), skirtMat);
-      skirtFlounce.position.set(0, 0.26, 0);
-      skirtFlounce.castShadow = true;
-      pGroup.add(bodice, waistBelt, skirtUpper, skirtFlounce);
-
-      if (variantIdx % 3 === 1) {
-        const shawl = new THREE.Mesh(track(new THREE.BoxGeometry(0.34, 0.16, 0.22)), mustardShawlMat);
-        shawl.position.set(0, 1.38, 0);
-        pGroup.add(shawl);
-      }
-
-      const legPivots: THREE.Group[] = [];
-      [-0.08, 0.08].forEach((lx) => {
-        const lPivot = new THREE.Group();
-        lPivot.position.set(lx, 0.2, 0);
-        const shoe = new THREE.Mesh(bootGeo, leatherBootMat);
-        shoe.position.set(0, -0.15, 0.04);
-        lPivot.add(shoe);
-        pGroup.add(lPivot);
-        legPivots.push(lPivot);
-      });
-
-      const armPivots: THREE.Group[] = [];
-      [-0.20, 0.20].forEach((ax, ai) => {
-        const aPivot = new THREE.Group();
-        aPivot.position.set(ax, 1.41, 0);
-        const sleeve = new THREE.Mesh(track(new THREE.CylinderGeometry(0.046, 0.036, 0.48, 8)), topMat);
-        sleeve.position.set(0, -0.23, 0);
-        const hand = new THREE.Mesh(handGeo, skinMat);
-        hand.position.set(0, -0.49, 0);
-        aPivot.add(sleeve, hand);
-        if (ai === 0 && variantIdx % 3 === 0) {
-          // Handbag
-          const bag = new THREE.Mesh(track(new THREE.BoxGeometry(0.08, 0.16, 0.18)), leatherBootMat);
-          bag.position.set(0, -0.58, 0.03);
-          aPivot.add(bag);
-        }
-        pGroup.add(aPivot);
-        armPivots.push(aPivot);
-      });
-
-      pGroup.add(headGroup);
-      return { pGroup, head: headGroup, arms: armPivots, legs: legPivots };
-    }
-
-    // Worker / Constable / Newsboy
-    const coatChoices = style === 'constable' ? [navyCoatMat] : [oliveTweedMat, brownTweedMat, navyCoatMat, charcoalMat];
-    const torsoMat = coatChoices[variantIdx % coatChoices.length];
-
-    if (style === 'constable') {
-      // Edwardian NZ Police Helmet
-      const helmet = new THREE.Mesh(track(new THREE.CylinderGeometry(0.095, 0.135, 0.18, 12)), navyCoatMat);
-      helmet.position.set(0, 0.16, 0);
-      const badge = new THREE.Mesh(track(new THREE.BoxGeometry(0.04, 0.05, 0.02)), brassMat);
-      badge.position.set(0, 0.16, 0.12);
-      headGroup.add(helmet, badge);
-    } else {
-      // Tweed Flat Cap with Visor Peak
-      const cap = new THREE.Mesh(track(new THREE.CylinderGeometry(0.125, 0.12, 0.06, 10)), brownTweedMat);
-      cap.position.set(0, 0.12, 0.01);
-      const peak = new THREE.Mesh(track(new THREE.BoxGeometry(0.15, 0.018, 0.1)), leatherBootMat);
-      peak.position.set(0, 0.10, 0.12);
-      headGroup.add(cap, peak);
-    }
-
-    const torso = new THREE.Mesh(track(new THREE.BoxGeometry(0.36, 0.50, 0.21)), torsoMat);
-    torso.position.set(0, 1.23, 0);
-    torso.castShadow = true;
-    const belt = new THREE.Mesh(track(new THREE.BoxGeometry(0.37, 0.06, 0.22)), harnessLeatherMat);
-    belt.position.set(0, 1.0, 0);
-    pGroup.add(torso, belt);
-
-    if (style === 'worker' && variantIdx % 2 === 1) {
-      // Canvas merchant/dock apron
-      const apron = new THREE.Mesh(track(new THREE.BoxGeometry(0.30, 0.58, 0.04)), creamBlouseMat);
-      apron.position.set(0, 0.92, 0.11);
-      pGroup.add(apron);
-    }
-
-    const legPivots: THREE.Group[] = [];
-    [-0.095, 0.095].forEach((lx) => {
-      const lPivot = new THREE.Group();
-      lPivot.position.set(lx, 0.94, 0);
-      const legMesh = new THREE.Mesh(track(new THREE.CylinderGeometry(0.072, 0.058, 0.84, 8)), brownTweedMat);
-      legMesh.position.set(0, -0.44, 0);
-      legMesh.castShadow = true;
-      const boot = new THREE.Mesh(bootGeo, leatherBootMat);
-      boot.position.set(0, -0.88, 0.035);
-      lPivot.add(legMesh, boot);
-      pGroup.add(lPivot);
-      legPivots.push(lPivot);
-    });
-
-    const armPivots: THREE.Group[] = [];
-    [-0.225, 0.225].forEach((ax) => {
-      const aPivot = new THREE.Group();
-      aPivot.position.set(ax, 1.42, 0);
-      const sleeve = new THREE.Mesh(track(new THREE.CylinderGeometry(0.052, 0.042, 0.50, 8)), torsoMat);
-      sleeve.position.set(0, -0.24, 0);
-      sleeve.castShadow = true;
-      const hand = new THREE.Mesh(handGeo, skinMat);
-      hand.position.set(0, -0.5, 0);
-      aPivot.add(sleeve, hand);
-      pGroup.add(aPivot);
-      armPivots.push(aPivot);
-    });
-
-    pGroup.add(headGroup);
-    return { pGroup, head: headGroup, arms: armPivots, legs: legPivots };
+  const createPedestrian = (style: CitizenStyle, variantIdx: number): ArticulatedHumanRig => {
+    return charPool.buildHuman(style, variantIdx);
   };
 
   // ---------------------------------------------------------------------------
-  // High-Definition Draft Horse + Harness Builder
+  // Articulated Parked / Moving Dray
   // ---------------------------------------------------------------------------
-  const createHorseMesh = (coatMat: THREE.Material) => {
-    const hGroup = new THREE.Group();
-
-    // Sculpted chest, barrel & haunches
-    const barrel = new THREE.Mesh(track(new THREE.CylinderGeometry(0.32, 0.34, 1.25, 12)), coatMat);
-    barrel.rotation.x = Math.PI / 2;
-    barrel.position.set(0, 1.18, 0);
-    barrel.castShadow = true;
-    const chest = new THREE.Mesh(track(new THREE.SphereGeometry(0.33, 10, 8)), coatMat);
-    chest.position.set(0, 1.2, 0.58);
-    const rump = new THREE.Mesh(track(new THREE.SphereGeometry(0.34, 10, 8)), coatMat);
-    rump.position.set(0, 1.21, -0.56);
-    hGroup.add(barrel, chest, rump);
-
-    // Leather saddle / harness collar & brass hames
-    const collar = new THREE.Mesh(track(new THREE.TorusGeometry(0.28, 0.055, 8, 14)), harnessLeatherMat);
-    collar.position.set(0, 1.32, 0.65);
-    collar.rotation.x = 0.42;
-    const hameRing = new THREE.Mesh(track(new THREE.TorusGeometry(0.285, 0.02, 6, 14)), brassMat);
-    hameRing.position.set(0, 1.33, 0.67);
-    hameRing.rotation.x = 0.42;
-    const girthStrap = new THREE.Mesh(track(new THREE.CylinderGeometry(0.35, 0.35, 0.14, 12)), harnessLeatherMat);
-    girthStrap.rotation.x = Math.PI / 2;
-    girthStrap.position.set(0, 1.18, 0.12);
-    hGroup.add(collar, hameRing, girthStrap);
-
-    // Muscular neck & flowing mane
-    const neck = new THREE.Mesh(track(new THREE.CylinderGeometry(0.15, 0.24, 0.66, 10)), coatMat);
-    neck.position.set(0, 1.54, 0.72);
-    neck.rotation.x = 0.55;
-    neck.castShadow = true;
-    const mane = new THREE.Mesh(track(new THREE.BoxGeometry(0.07, 0.54, 0.12)), maneMat);
-    mane.position.set(0, 1.60, 0.62);
-    mane.rotation.x = 0.55;
-    hGroup.add(neck, mane);
-
-    // Sculpted Head + Muzzle + Ears + Bridle
-    const headPivot = new THREE.Group();
-    headPivot.position.set(0, 1.80, 0.94);
-
-    const skull = new THREE.Mesh(track(new THREE.BoxGeometry(0.22, 0.24, 0.28)), coatMat);
-    skull.position.set(0, -0.02, 0.1);
-    skull.rotation.x = 0.52;
-    const muzzle = new THREE.Mesh(track(new THREE.CylinderGeometry(0.085, 0.11, 0.26, 8)), coatMat);
-    muzzle.position.set(0, -0.16, 0.24);
-    muzzle.rotation.x = Math.PI / 2 + 0.52;
-    const bridle = new THREE.Mesh(track(new THREE.TorusGeometry(0.11, 0.015, 6, 12)), harnessLeatherMat);
-    bridle.position.set(0, -0.14, 0.22);
-    bridle.rotation.y = Math.PI / 2;
-
-    [-0.07, 0.07].forEach((ex) => {
-      const ear = new THREE.Mesh(track(new THREE.ConeGeometry(0.032, 0.11, 5)), coatMat);
-      ear.position.set(ex, 0.12, 0.02);
-      headPivot.add(ear);
-    });
-    headPivot.add(skull, muzzle, bridle);
-    hGroup.add(headPivot);
-
-    // Flowing Tail
-    const tailPivot = new THREE.Group();
-    tailPivot.position.set(0, 1.34, -0.82);
-    const tail = new THREE.Mesh(track(new THREE.CylinderGeometry(0.045, 0.095, 0.74, 8)), maneMat);
-    tail.position.set(0, -0.35, -0.08);
-    tail.rotation.x = -0.22;
-    tailPivot.add(tail);
-    hGroup.add(tailPivot);
-
-    // Jointed Upper/Lower Legs + Hooves (with hip/shoulder pivots for trotting animation)
-    const legPivots: THREE.Group[] = [];
-    const upperGeo = track(new THREE.CylinderGeometry(0.085, 0.062, 0.48, 8));
-    const lowerGeo = track(new THREE.CylinderGeometry(0.056, 0.048, 0.46, 8));
-    const hoofGeo = track(new THREE.CylinderGeometry(0.06, 0.068, 0.08, 8));
-    [
-      [0.19, 0.56],
-      [-0.19, 0.56],
-      [0.19, -0.56],
-      [-0.19, -0.56],
-    ].forEach(([lx, lz]) => {
-      const lPivot = new THREE.Group();
-      lPivot.position.set(lx, 0.96, lz);
-      const upper = new THREE.Mesh(upperGeo, coatMat);
-      upper.position.set(0, -0.24, 0);
-      upper.castShadow = true;
-      const lower = new THREE.Mesh(lowerGeo, coatMat);
-      lower.position.set(0, -0.69, 0);
-      lower.castShadow = true;
-      const hoof = new THREE.Mesh(hoofGeo, maneMat);
-      hoof.position.set(0, -0.92, 0);
-      lPivot.add(upper, lower, hoof);
-      hGroup.add(lPivot);
-      legPivots.push(lPivot);
-    });
-
-    return { hGroup, headPivot, tailPivot, legPivots };
-  };
-
-  // ---------------------------------------------------------------------------
-  // High-Definition Parked / Moving Dray
-  // ---------------------------------------------------------------------------
-  const createParkedDray = (coatMat: THREE.Material) => {
+  const createParkedDray = (coatHex: number) => {
     const root = new THREE.Group();
-    const { hGroup, headPivot, tailPivot, legPivots } = createHorseMesh(coatMat);
-    hGroup.position.set(0, 0, 1.72);
-    root.add(hGroup);
+    const horseRig = charPool.buildHorse(coatHex, true);
+    horseRig.group.position.set(0, 0, 1.72);
+    root.add(horseRig.group);
 
     const shaftGeo = track(new THREE.BoxGeometry(0.06, 0.06, 2.0));
     [-0.39, 0.39].forEach((sx) => {
@@ -697,7 +371,14 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
       cartWheels.push(wGroup);
     });
 
-    return { root, headPivot, tailPivot, legPivots, cartWheels };
+    return {
+      root,
+      headPivot: horseRig.headPivot,
+      tailPivot: horseRig.tailPivot,
+      legPivots: horseRig.legPivots,
+      kneePivots: horseRig.kneePivots,
+      cartWheels,
+    };
   };
 
   // ---------------------------------------------------------------------------
@@ -820,20 +501,22 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
       wheels.push(wGroup);
     });
 
-    // Driver inside cockpit
+    // Articulated Driver inside cockpit
     if (withDriver) {
-      const driverBody = new THREE.Mesh(track(new THREE.BoxGeometry(0.38, 0.46, 0.24)), brownTweedMat);
-      driverBody.position.set(-0.24, 1.08, -0.18);
-      const driverHead = new THREE.Mesh(headGeo, skinMat);
-      driverHead.position.set(-0.24, 1.44, -0.18);
-      const flatCap = new THREE.Mesh(track(new THREE.CylinderGeometry(0.125, 0.12, 0.055, 10)), charcoalMat);
-      flatCap.position.set(-0.24, 1.53, -0.16);
-      const goggles = new THREE.Mesh(track(new THREE.BoxGeometry(0.16, 0.045, 0.06)), brassMat);
-      goggles.position.set(-0.24, 1.46, -0.07);
+      const driverRig = charPool.buildHuman('gentleman', 2, { seated: true });
+      driverRig.group.scale.setScalar(0.86);
+      driverRig.group.position.set(-0.24, 0.85, -0.18);
+      driverRig.leftArm.rotation.x = -0.68;
+      driverRig.rightArm.rotation.x = -0.68;
+      driverRig.leftElbow.rotation.x = -0.52;
+      driverRig.rightElbow.rotation.x = -0.52;
+      const goggles = new THREE.Mesh(track(new THREE.BoxGeometry(0.15, 0.04, 0.05)), brassMat);
+      goggles.position.set(0, 0.065, 0.095);
+      driverRig.headPivot.add(goggles);
       const steerCol = new THREE.Mesh(track(new THREE.CylinderGeometry(0.02, 0.02, 0.65, 6)), brassMat);
       steerCol.position.set(-0.24, 1.04, 0.1);
       steerCol.rotation.x = -0.75;
-      cGroup.add(driverBody, driverHead, flatCap, goggles, steerCol);
+      cGroup.add(driverRig.group, steerCol);
     }
 
     return { cGroup, wheels, headlightBulbs };
@@ -868,8 +551,8 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
     });
 
     if (blk.hasCart) {
-      const horseMat = idx % 3 === 0 ? bayHorseMat : idx % 3 === 1 ? chestnutHorseMat : dappleGreyMat;
-      const dray = createParkedDray(horseMat);
+      const horseHex = idx % 3 === 0 ? bayHorseHex : idx % 3 === 1 ? chestnutHorseHex : dappleGreyHex;
+      const dray = createParkedDray(horseHex);
       dray.root.position.set(idx % 2 === 0 ? -0.4 : 0.4, 0, -1.6);
       dray.root.rotation.y = Math.PI * 0.44 * (idx % 2 === 0 ? 1 : -1);
       bGroup.add(dray.root);
@@ -896,18 +579,19 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
     const totalSpecs = blk.spectatorCount + 3;
     for (let s = 0; s < totalSpecs; s++) {
       const style = s === 0 && idx % 3 === 0 ? 'constable' : citizenStyles[(idx + s) % citizenStyles.length];
-      const { pGroup, head, arms } = createPedestrian(style, idx * 3 + s);
+      const ped = createPedestrian(style, idx * 3 + s);
       const px = -4.3 + (s / Math.max(1, totalSpecs - 1)) * 8.6;
       const pz = s % 2 === 0 ? -0.65 : -1.25;
-      pGroup.position.set(px, 0, pz);
+      ped.group.position.set(px, 0, pz);
       if (s % 3 === 1) {
-        pGroup.rotation.y = 0.45; // conversing slightly sideways with neighbor
+        ped.group.rotation.y = 0.45; // conversing slightly sideways with neighbor
       }
-      bGroup.add(pGroup);
+      bGroup.add(ped.group);
       spectators.push({
-        group: pGroup,
-        head,
-        arms,
+        group: ped.group,
+        head: ped.headPivot,
+        arms: [ped.leftArm, ped.rightArm],
+        elbows: [ped.leftElbow, ped.rightElbow],
         phase: idx * 1.1 + s * 0.85,
         mode: s % 3 === 0 ? 'cheering' : s % 3 === 1 ? 'discussing' : 'watching',
       });
@@ -1066,6 +750,121 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
         { dx: -0.1, dz: 2.1, yaw: Math.PI / 2, style: 'worker', mode: 'cheering' },
       ],
     },
+    // Whitestone Exchange Saturday Market Stall Shoppers (Harbour St South)
+    {
+      cx: -4,
+      cz: 10.6,
+      label: 'Harbour Market Verandah',
+      members: [
+        { dx: -3.4, dz: 0.2, yaw: 0.1, style: 'lady', mode: 'watching' },
+        { dx: -2.2, dz: -0.1, yaw: Math.PI + 0.4, style: 'worker', mode: 'discussing' },
+        { dx: -1.3, dz: 0.1, yaw: Math.PI - 0.5, style: 'lady', mode: 'discussing' },
+        { dx: 0.4, dz: 0.3, yaw: 0.0, style: 'lady', mode: 'watching' },
+        { dx: 1.8, dz: -0.2, yaw: Math.PI + 0.3, style: 'gentleman', mode: 'discussing' },
+        { dx: 2.7, dz: 0.0, yaw: Math.PI - 0.4, style: 'lady', mode: 'discussing' },
+        { dx: 4.1, dz: -0.1, yaw: Math.PI, style: 'newsboy', mode: 'cheering' },
+      ],
+    },
+    // Imperial Hotel & Sumpter Produce Arcade
+    {
+      cx: 66,
+      cz: 10.5,
+      label: 'Imperial Hotel Arcade',
+      members: [
+        { dx: -3.2, dz: 0.0, yaw: Math.PI + 0.5, style: 'gentleman', mode: 'discussing' },
+        { dx: -2.3, dz: 0.2, yaw: Math.PI - 0.5, style: 'gentleman', mode: 'discussing' },
+        { dx: -0.8, dz: 0.1, yaw: Math.PI, style: 'lady', mode: 'watching' },
+        { dx: 0.8, dz: 0.2, yaw: Math.PI + 0.3, style: 'worker', mode: 'cheering' },
+        { dx: 2.1, dz: -0.1, yaw: Math.PI - 0.3, style: 'lady', mode: 'discussing' },
+        { dx: 3.1, dz: 0.1, yaw: Math.PI, style: 'constable', mode: 'watching' },
+      ],
+    },
+    // Sumpter Wharf Cargo Hands & Bystanders
+    {
+      cx: 92,
+      cz: -8.6,
+      label: 'Sumpter Wharf Sheds',
+      members: [
+        { dx: -2.8, dz: 0.2, yaw: 0.4, style: 'worker', mode: 'discussing' },
+        { dx: -1.9, dz: -0.1, yaw: -0.5, style: 'worker', mode: 'discussing' },
+        { dx: -0.2, dz: 0.0, yaw: 0.0, style: 'worker', mode: 'watching' },
+        { dx: 1.4, dz: 0.3, yaw: -0.2, style: 'gentleman', mode: 'cheering' },
+        { dx: 2.7, dz: 0.1, yaw: 0.1, style: 'newsboy', mode: 'cheering' },
+      ],
+    },
+    // Chief Post Office & Star & Garter Corner Crowd (Thames & Itchen)
+    {
+      cx: -112.8,
+      cz: -38,
+      label: 'Post Office Arcade',
+      members: [
+        { dx: 0.0, dz: -3.0, yaw: Math.PI / 2, style: 'gentleman', mode: 'watching' },
+        { dx: -0.2, dz: -1.8, yaw: Math.PI / 2 + 0.4, style: 'lady', mode: 'discussing' },
+        { dx: -0.1, dz: -0.9, yaw: Math.PI / 2 - 0.4, style: 'lady', mode: 'discussing' },
+        { dx: 0.1, dz: 0.8, yaw: Math.PI / 2, style: 'newsboy', mode: 'cheering' },
+        { dx: 0.0, dz: 2.1, yaw: Math.PI / 2, style: 'constable', mode: 'watching' },
+      ],
+    },
+    // Queen's Chambers & Oamaru Mail Press Window Shoppers (Thames St East)
+    {
+      cx: -95.2,
+      cz: 58,
+      label: "Queen's Chambers",
+      members: [
+        { dx: 0.1, dz: -2.4, yaw: -Math.PI / 2, style: 'lady', mode: 'watching' },
+        { dx: -0.1, dz: -1.3, yaw: -Math.PI / 2 + 0.5, style: 'lady', mode: 'discussing' },
+        { dx: 0.0, dz: -0.4, yaw: -Math.PI / 2 - 0.4, style: 'gentleman', mode: 'discussing' },
+        { dx: 0.1, dz: 1.2, yaw: -Math.PI / 2, style: 'worker', mode: 'watching' },
+        { dx: 0.0, dz: 2.3, yaw: -Math.PI / 2, style: 'gentleman', mode: 'cheering' },
+      ],
+    },
+    // Meek's Flour Mill & National Mortgage Footpath Market (Harbour St North)
+    {
+      cx: 36,
+      cz: -10.5,
+      label: "Meek's Granary Arcade",
+      members: [
+        { dx: -3.0, dz: 0.1, yaw: 0.4, style: 'worker', mode: 'discussing' },
+        { dx: -2.1, dz: -0.2, yaw: -0.5, style: 'gentleman', mode: 'discussing' },
+        { dx: -0.3, dz: 0.0, yaw: 0.0, style: 'lady', mode: 'watching' },
+        { dx: 1.1, dz: -0.1, yaw: 0.3, style: 'lady', mode: 'cheering' },
+        { dx: 2.4, dz: 0.0, yaw: -0.2, style: 'worker', mode: 'watching' },
+      ],
+    },
+    // Tyne St & Waitaki Farmers Market Corner
+    {
+      cx: -14.5,
+      cz: 56,
+      label: 'Tyne St Wool Market',
+      members: [
+        { dx: 0.0, dz: -2.2, yaw: Math.PI / 2, style: 'worker', mode: 'discussing' },
+        { dx: -0.2, dz: -1.3, yaw: Math.PI / 2 - 0.5, style: 'gentleman', mode: 'discussing' },
+        { dx: 0.1, dz: 0.4, yaw: Math.PI / 2, style: 'lady', mode: 'watching' },
+        { dx: 0.0, dz: 1.7, yaw: Math.PI / 2, style: 'newsboy', mode: 'cheering' },
+      ],
+    },
+    // Cape Wanbrow Summit Lighthouse Viewpoint
+    {
+      cx: 42,
+      cz: 187.5,
+      label: 'Cape Wanbrow Lighthouse',
+      members: [
+        { dx: -2.4, dz: 0.0, yaw: 0.3, style: 'lady', mode: 'watching' },
+        { dx: -1.2, dz: 0.2, yaw: -0.4, style: 'gentleman', mode: 'discussing' },
+        { dx: 0.6, dz: -0.1, yaw: 0.1, style: 'newsboy', mode: 'cheering' },
+      ],
+    },
+    // Waitaki Flour Mill & Overbridge Spectators
+    {
+      cx: -95.2,
+      cz: -124,
+      label: 'Waitaki Flour Mill',
+      members: [
+        { dx: 0.1, dz: -2.2, yaw: -Math.PI / 2 + 0.3, style: 'worker', mode: 'discussing' },
+        { dx: -0.1, dz: -1.1, yaw: -Math.PI / 2 - 0.4, style: 'worker', mode: 'discussing' },
+        { dx: 0.0, dz: 1.4, yaw: -Math.PI / 2, style: 'gentleman', mode: 'watching' },
+      ],
+    },
   ];
 
   conversationClusters.forEach((cl, ci) => {
@@ -1073,14 +872,15 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
       const wx = cl.cx + m.dx;
       const wz = cl.cz + m.dz;
       const wy = getTerrainHeightAndSurface(wx, wz).height;
-      const { pGroup, head, arms } = createPedestrian(m.style, ci * 7 + mi);
-      pGroup.position.set(wx, wy, wz);
-      pGroup.rotation.y = m.yaw;
-      group.add(pGroup);
+      const ped = createPedestrian(m.style, ci * 7 + mi);
+      ped.group.position.set(wx, wy, wz);
+      ped.group.rotation.y = m.yaw;
+      group.add(ped.group);
       spectators.push({
-        group: pGroup,
-        head,
-        arms,
+        group: ped.group,
+        head: ped.headPivot,
+        arms: [ped.leftArm, ped.rightArm],
+        elbows: [ped.leftElbow, ped.rightElbow],
         phase: ci * 1.4 + mi * 0.75,
         mode: m.mode,
       });
@@ -1088,27 +888,45 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
     crowdClusters.push({ x: cl.cx, z: cl.cz, density: cl.members.length, label: cl.label });
   });
 
-  // Walking Pedestrians strolling along safe stone footpaths (clear of road carriageway)
+  // Walking Pedestrians strolling along safe stone footpaths (bustling Saturday market traffic)
   const sidewalkWalkRoutes: { x1: number; z1: number; x2: number; z2: number; style: CitizenStyle; speed: number }[] = [
     { x1: -72, z1: -9.4, x2: -12, z2: -9.4, style: 'gentleman', speed: 1.35 },
+    { x1: -64, z1: -10.4, x2: 18, z2: -10.4, style: 'lady', speed: 1.12 },
     { x1: -8, z1: 9.4, x2: 65, z2: 9.4, style: 'lady', speed: 1.15 },
-    { x1: 12, z1: -9.5, x2: 68, z2: -9.5, style: 'worker', speed: 1.4 },
+    { x1: -78, z1: 10.3, x2: 24, z2: 10.3, style: 'gentleman', speed: 1.32 },
+    { x1: 12, z1: -9.5, x2: 78, z2: -9.5, style: 'worker', speed: 1.4 },
+    { x1: 28, z1: 10.4, x2: 78, z2: 10.4, style: 'newsboy', speed: 1.55 },
     { x1: -95.2, z1: -56, x2: -95.2, z2: -16, style: 'lady', speed: 1.2 },
+    { x1: -95.2, z1: 18, x2: -95.2, z2: 94, style: 'gentleman', speed: 1.28 },
     { x1: -112.8, z1: -58, x2: -112.8, z2: -18, style: 'gentleman', speed: 1.3 },
+    { x1: -112.8, z1: 18, x2: -112.8, z2: 96, style: 'lady', speed: 1.16 },
+    { x1: -112.8, z1: -44, x2: -112.8, z2: 36, style: 'constable', speed: 1.08 },
     { x1: -143.2, z1: -48, x2: -143.2, z2: 96, style: 'worker', speed: 1.38 },
+    { x1: -160.2, z1: -42, x2: -160.2, z2: 88, style: 'lady', speed: 1.14 },
     { x1: 86.2, z1: 14, x2: 86.2, z2: 98, style: 'gentleman', speed: 1.25 },
+    { x1: 86.2, z1: -62, x2: 86.2, z2: -14, style: 'worker', speed: 1.44 },
     { x1: -82, z1: 109.2, x2: 74, z2: 109.2, style: 'lady', speed: 1.18 },
+    { x1: -34, z1: 109.6, x2: 52, z2: 109.6, style: 'gentleman', speed: 1.34 },
+    { x1: -88, z1: -75.5, x2: 52, z2: -75.5, style: 'worker', speed: 1.36 },
+    { x1: -14, z1: 28, x2: -14, z2: 92, style: 'lady', speed: 1.22 },
+    { x1: -34, z1: -9.8, x2: 46, z2: -9.8, style: 'newsboy', speed: 1.6 },
+    { x1: -112.8, z1: -136, x2: -112.8, z2: -82, style: 'worker', speed: 1.32 },
+    { x1: -10, z1: 187.5, x2: 76, z2: 187.5, style: 'gentleman', speed: 1.26 },
   ];
 
   sidewalkWalkRoutes.forEach((rt, wi) => {
-    const { pGroup, arms, legs } = createPedestrian(rt.style, wi + 2);
-    group.add(pGroup);
+    const ped = createPedestrian(rt.style, wi + 2);
+    group.add(ped.group);
     walkers.push({
-      group: pGroup,
-      leftLeg: legs[0],
-      rightLeg: legs[1],
-      leftArm: arms[0],
-      rightArm: arms[1],
+      group: ped.group,
+      leftLeg: ped.leftLeg,
+      rightLeg: ped.rightLeg,
+      leftKnee: ped.leftKnee,
+      rightKnee: ped.rightKnee,
+      leftArm: ped.leftArm,
+      rightArm: ped.rightArm,
+      leftElbow: ped.leftElbow,
+      rightElbow: ped.rightElbow,
       x1: rt.x1,
       z1: rt.z1,
       x2: rt.x2,
@@ -1122,7 +940,7 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
   });
 
   // ---------------------------------------------------------------------------
-  // 3. High-Definition Animals: Farm Collies (Bark & Chase), Merino Sheep & Horses
+  // 3. Articulated Animals: Farm Collies (Bark & Chase), Merino Sheep & Horses
   // ---------------------------------------------------------------------------
   const dogSpots: { x: number; z: number; yaw: number; canChase: boolean }[] = [
     { x: -46, z: 9.5, yaw: Math.PI, canChase: true }, // Criterion Hotel start/finish collie
@@ -1132,65 +950,20 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
     { x: 86.5, z: 46, yaw: -Math.PI / 2, canChase: false }, // Quay Esplanade barker
     { x: 10, z: 108.5, yaw: 0, canChase: true }, // Wanbrow Ridge sheepdog
   ];
-  const dogLegGeo = track(new THREE.CylinderGeometry(0.032, 0.025, 0.30, 6));
 
   dogSpots.forEach((spot, idx) => {
-    const dGroup = new THREE.Group();
-    const body = new THREE.Mesh(track(new THREE.CylinderGeometry(0.13, 0.14, 0.56, 10)), collieMat);
-    body.rotation.x = Math.PI / 2;
-    body.position.set(0, 0.40, 0);
-    body.castShadow = true;
-    const chest = new THREE.Mesh(track(new THREE.SphereGeometry(0.15, 8, 8)), collieWhiteMat);
-    chest.position.set(0, 0.42, 0.24);
-
-    const headPivot = new THREE.Group();
-    headPivot.position.set(0, 0.54, 0.30);
-    const skull = new THREE.Mesh(track(new THREE.BoxGeometry(0.15, 0.15, 0.18)), collieMat);
-    skull.position.set(0, 0.02, 0.05);
-    const snout = new THREE.Mesh(track(new THREE.CylinderGeometry(0.035, 0.055, 0.14, 7)), collieWhiteMat);
-    snout.rotation.x = Math.PI / 2;
-    snout.position.set(0, 0.0, 0.17);
-    const earL = new THREE.Mesh(track(new THREE.ConeGeometry(0.03, 0.08, 4)), collieMat);
-    earL.position.set(0.055, 0.11, 0.02);
-    const earR = new THREE.Mesh(track(new THREE.ConeGeometry(0.03, 0.08, 4)), collieMat);
-    earR.position.set(-0.055, 0.11, 0.02);
-    headPivot.add(skull, snout, earL, earR);
-
-    const tailPivot = new THREE.Group();
-    tailPivot.position.set(0, 0.46, -0.28);
-    const tail = new THREE.Mesh(track(new THREE.CylinderGeometry(0.024, 0.042, 0.32, 6)), collieMat);
-    tail.position.set(0, 0.09, -0.11);
-    tail.rotation.x = -0.92;
-    tailPivot.add(tail);
-
-    const legPivots: THREE.Object3D[] = [];
-    [
-      [0.09, 0.20],
-      [-0.09, 0.20],
-      [0.09, -0.20],
-      [-0.09, -0.20],
-    ].forEach(([lx, lz]) => {
-      const lPivot = new THREE.Group();
-      lPivot.position.set(lx, 0.30, lz);
-      const leg = new THREE.Mesh(dogLegGeo, collieWhiteMat);
-      leg.position.set(0, -0.15, 0);
-      leg.castShadow = true;
-      lPivot.add(leg);
-      dGroup.add(lPivot);
-      legPivots.push(lPivot);
-    });
-    dGroup.add(body, chest, headPivot, tailPivot);
-
+    const dogRig = charPool.buildCollie(idx);
     const dy = getTerrainHeightAndSurface(spot.x, spot.z).height;
-    dGroup.position.set(spot.x, dy, spot.z);
-    dGroup.rotation.y = spot.yaw;
-    group.add(dGroup);
+    dogRig.group.position.set(spot.x, dy, spot.z);
+    dogRig.group.rotation.y = spot.yaw;
+    group.add(dogRig.group);
 
     dogs.push({
-      group: dGroup,
-      head: headPivot,
-      tail: tailPivot,
-      legs: legPivots,
+      group: dogRig.group,
+      head: dogRig.headPivot,
+      tail: dogRig.tailPivot,
+      legs: dogRig.legPivots,
+      knees: dogRig.kneePivots,
       homeX: spot.x,
       homeZ: spot.z,
       homeYaw: spot.yaw,
@@ -1225,51 +998,25 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
     { x: 2, z: 129, yaw: -0.4, minX: -46, maxX: 55, minZ: 126.8, maxZ: 150 },
     { x: 7, z: 131, yaw: 0.9, minX: -46, maxX: 55, minZ: 126.8, maxZ: 150 },
     { x: 12, z: 128, yaw: 2.3, minX: -46, maxX: 55, minZ: 126.8, maxZ: 150 },
+    // Cape Wanbrow Lighthouse Summit Pasture (west of compound)
+    { x: -16, z: 174, yaw: 0.5, minX: -48, maxX: 20, minZ: 162, maxZ: 184 },
+    { x: -10, z: 178, yaw: -1.1, minX: -48, maxX: 20, minZ: 162, maxZ: 184 },
+    { x: -4, z: 170, yaw: 1.7, minX: -48, maxX: 20, minZ: 162, maxZ: 184 },
+    { x: 3, z: 176, yaw: -0.3, minX: -48, maxX: 20, minZ: 162, maxZ: 184 },
   ];
-  const sLegGeo = track(new THREE.CylinderGeometry(0.04, 0.035, 0.32, 6));
 
   sheepSpecs.forEach((sp, idx) => {
-    const sGroup = new THREE.Group();
-    const fleece = new THREE.Mesh(track(new THREE.SphereGeometry(0.36, 10, 8)), sheepWoolMat);
-    fleece.scale.set(0.85, 0.85, 1.35);
-    fleece.position.set(0, 0.52, 0);
-    fleece.castShadow = true;
-    const headPivot = new THREE.Group();
-    headPivot.position.set(0, 0.62, 0.42);
-    const sHead = new THREE.Mesh(track(new THREE.BoxGeometry(0.18, 0.18, 0.28)), sheepFaceMat);
-    sHead.position.set(0, -0.02, 0.08);
-    headPivot.add(sHead);
-    const tailPivot = new THREE.Group();
-    tailPivot.position.set(0, 0.50, -0.44);
-    const sTail = new THREE.Mesh(track(new THREE.SphereGeometry(0.08, 6, 6)), sheepWoolMat);
-    tailPivot.add(sTail);
-
-    const legPivots: THREE.Object3D[] = [];
-    [
-      [0.14, 0.24],
-      [-0.14, 0.24],
-      [0.14, -0.24],
-      [-0.14, -0.24],
-    ].forEach(([lx, lz]) => {
-      const lPivot = new THREE.Group();
-      lPivot.position.set(lx, 0.32, lz);
-      const leg = new THREE.Mesh(sLegGeo, sheepFaceMat);
-      leg.position.set(0, -0.16, 0);
-      leg.castShadow = true;
-      lPivot.add(leg);
-      sGroup.add(lPivot);
-      legPivots.push(lPivot);
-    });
-    sGroup.add(fleece, headPivot, tailPivot);
-    sGroup.position.set(sp.x, getTerrainHeightAndSurface(sp.x, sp.z).height, sp.z);
-    sGroup.rotation.y = sp.yaw;
-    group.add(sGroup);
+    const sheepRig = charPool.buildSheep({ withHorns: idx % 3 === 0 });
+    sheepRig.group.position.set(sp.x, getTerrainHeightAndSurface(sp.x, sp.z).height, sp.z);
+    sheepRig.group.rotation.y = sp.yaw;
+    group.add(sheepRig.group);
 
     sheepList.push({
-      group: sGroup,
-      head: headPivot,
-      tail: tailPivot,
-      legs: legPivots,
+      group: sheepRig.group,
+      head: sheepRig.headPivot,
+      tail: sheepRig.tailPivot,
+      legs: sheepRig.legPivots,
+      knees: sheepRig.kneePivots,
       homeX: sp.x,
       homeZ: sp.z,
       x: sp.x,
@@ -1288,25 +1035,37 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
   });
 
   // Grazing Saddle Horses beside Northern Stables & Rail Siding
-  const looseHorses: [number, number, number, THREE.Material][] = [
-    [-72, 10, Math.PI * 0.8, dappleGreyMat],
-    [34, -42, -0.6, chestnutHorseMat],
+  const looseHorses: [number, number, number, number][] = [
+    [-72, 10, Math.PI * 0.8, dappleGreyHex],
+    [34, -42, -0.6, chestnutHorseHex],
   ];
-  looseHorses.forEach(([hx, hz, hyaw, mat], idx) => {
-    const { hGroup, headPivot, tailPivot } = createHorseMesh(mat);
-    hGroup.position.set(hx, getTerrainHeightAndSurface(hx, hz).height, hz);
-    hGroup.rotation.y = hyaw;
-    group.add(hGroup);
-    idleAnimals.push({ kind: 'horse', x: hx, z: hz, head: headPivot, tail: tailPivot, startleTimer: 0, phase: idx * 2.4 });
+  looseHorses.forEach(([hx, hz, hyaw, coatHex], idx) => {
+    const horseRig = charPool.buildHorse(coatHex, false);
+    horseRig.group.position.set(hx, getTerrainHeightAndSurface(hx, hz).height, hz);
+    horseRig.group.rotation.y = hyaw;
+    group.add(horseRig.group);
+    idleAnimals.push({
+      kind: 'horse',
+      x: hx,
+      z: hz,
+      head: horseRig.headPivot,
+      tail: horseRig.tailPivot,
+      startleTimer: 0,
+      phase: idx * 2.4,
+    });
   });
 
   // Moving Horse-Drawn Grain Dray trotting calmly along outer kerbside of circuit
   {
-    const dray = createParkedDray(bayHorseMat);
-    const { pGroup: drayDriver } = createPedestrian('worker', 9);
-    drayDriver.scale.setScalar(0.86);
-    drayDriver.position.set(0, 0.72, -0.2);
-    dray.root.add(drayDriver);
+    const dray = createParkedDray(bayHorseHex);
+    const drayDriver = charPool.buildHuman('worker', 9, { seated: true });
+    drayDriver.group.scale.setScalar(0.86);
+    drayDriver.group.position.set(0, 1.18, -0.15);
+    drayDriver.leftArm.rotation.x = -0.52;
+    drayDriver.rightArm.rotation.x = -0.52;
+    drayDriver.leftElbow.rotation.x = -0.68;
+    drayDriver.rightElbow.rotation.x = -0.68;
+    dray.root.add(drayDriver.group);
     const startProg = 680;
     const pos = sampleCircuitLoop(startProg, -2.9);
     dray.root.position.set(pos.x, getTerrainHeightAndSurface(pos.x, pos.z).height, pos.z);
@@ -1315,6 +1074,7 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
     movingDrays.push({
       group: dray.root,
       horseLegs: dray.legPivots,
+      horseKnees: dray.kneePivots,
       cartWheels: dray.cartWheels,
       head: dray.headPivot,
       tail: dray.tailPivot,
@@ -1346,7 +1106,7 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
   // Moving Period Touring Cars pacing on the circuit (competitive trial rivals)
   const movingCarSpecs = [
     { startProgress: 82, speedMps: 7.4, laneOffset: 2.3, color: 0x5c2224 }, // 1913 Burgundy Roadster
-    { startProgress: 340, speedMps: 6.5, laneOffset: -2.2, color: 0x263529 }, // 1912 Deep Green Tourer
+    { startProgress: 520, speedMps: 6.5, laneOffset: -2.2, color: 0x263529 }, // 1912 Deep Green Tourer
   ];
   movingCarSpecs.forEach((ms) => {
     const { cGroup, wheels, headlightBulbs } = createVintageCar(ms.color, true);
@@ -1365,9 +1125,90 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
       laneOffset: ms.laneOffset,
       x: pos.x,
       z: pos.z,
+      yaw: pos.yaw,
     });
     obstacles.push({ x: pos.x, z: pos.z, radius: 1.55 });
   });
+
+  // Animated 1914 Edwardian Safety Bicycles cruising kerbside lanes
+  const cyclistSpecs: { startProgress: number; speedMps: number; laneOffset: number; style: CitizenStyle }[] = [
+    { startProgress: 210, speedMps: 4.3, laneOffset: 4.1, style: 'gentleman' },
+    { startProgress: 840, speedMps: 3.9, laneOffset: -4.1, style: 'worker' },
+  ];
+  const bikeTireGeo = track(new THREE.TorusGeometry(0.32, 0.024, 6, 16));
+  bikeTireGeo.rotateY(Math.PI / 2);
+  const bikeSpokeGeo = track(new THREE.CylinderGeometry(0.008, 0.008, 0.62, 5));
+  const bikeTubeGeo = track(new THREE.CylinderGeometry(0.015, 0.015, 0.56, 6));
+  cyclistSpecs.forEach((cs, idx) => {
+    const cRoot = new THREE.Group();
+    const wheels: THREE.Object3D[] = [];
+    [0.52, -0.52].forEach((wz) => {
+      const wg = new THREE.Group();
+      wg.position.set(0, 0.34, wz);
+      const tire = new THREE.Mesh(bikeTireGeo, rubberTyreMat);
+      wg.add(tire);
+      for (let s = 0; s < 3; s++) {
+        const sp = new THREE.Mesh(bikeSpokeGeo, ironWheelMat);
+        sp.rotation.x = (s * Math.PI) / 3;
+        wg.add(sp);
+      }
+      cRoot.add(wg);
+      wheels.push(wg);
+    });
+    const topBar = new THREE.Mesh(bikeTubeGeo, ironWheelMat);
+    topBar.rotation.x = Math.PI / 2;
+    topBar.position.set(0, 0.76, 0.14);
+    const downTube = new THREE.Mesh(bikeTubeGeo, ironWheelMat);
+    downTube.rotation.x = 0.72;
+    downTube.position.set(0, 0.55, 0.14);
+    const seatPost = new THREE.Mesh(bikeTubeGeo, ironWheelMat);
+    seatPost.rotation.x = -0.25;
+    seatPost.position.set(0, 0.6, -0.1);
+    const handleBar = new THREE.Mesh(track(new THREE.BoxGeometry(0.46, 0.025, 0.025)), brassMat);
+    handleBar.position.set(0, 0.94, 0.42);
+    const saddle = new THREE.Mesh(track(new THREE.BoxGeometry(0.14, 0.05, 0.22)), leatherSeatMat);
+    saddle.position.set(0, 0.86, -0.14);
+    cRoot.add(topBar, downTube, seatPost, handleBar, saddle);
+
+    const rider = charPool.buildHuman(cs.style, idx + 4, { seated: true });
+    rider.group.scale.setScalar(0.92);
+    rider.group.position.set(0, 0.16, -0.16);
+    rider.leftArm.rotation.x = -0.82;
+    rider.rightArm.rotation.x = -0.82;
+    rider.leftElbow.rotation.x = -0.25;
+    rider.rightElbow.rotation.x = -0.25;
+    cRoot.add(rider.group);
+
+    const pos = sampleCircuitLoop(cs.startProgress, cs.laneOffset);
+    cRoot.position.set(pos.x, getTerrainHeightAndSurface(pos.x, pos.z).height, pos.z);
+    cRoot.rotation.y = pos.yaw;
+    group.add(cRoot);
+    movingCyclists.push({
+      group: cRoot,
+      wheels,
+      leftLeg: rider.leftLeg,
+      rightLeg: rider.rightLeg,
+      leftKnee: rider.leftKnee,
+      rightKnee: rider.rightKnee,
+      progress: cs.startProgress,
+      speedMps: cs.speedMps,
+      laneOffset: cs.laneOffset,
+      phase: idx * 1.9,
+    });
+    obstacles.push({ x: pos.x, z: pos.z, radius: 0.68 });
+  });
+
+  // Constable Finch manning the Thames North Speed Trap
+  const constableFinch = createPedestrian('constable', 1);
+  constellationSetup: {
+    constableFinch.group.position.set(
+      SPEED_TRAP_ZONE.constableX,
+      getTerrainHeightAndSurface(SPEED_TRAP_ZONE.constableX, SPEED_TRAP_ZONE.constableZ, true).height,
+      SPEED_TRAP_ZONE.constableZ
+    );
+    constableFinch.group.rotation.y = -Math.PI / 2;
+    group.add(constableFinch.group);
+  }
 
   // ---------------------------------------------------------------------------
   // 5. Higher-Definition Coastal Seagulls Wheeling Over Harbour & Sumpter Wharf
@@ -1446,100 +1287,29 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
   tartanTex.repeat.set(2, 2);
 
   const tartanMat = track(new THREE.MeshStandardMaterial({ map: tartanTex, roughness: 0.85 }));
-  const kiltJacketMat = track(new THREE.MeshStandardMaterial({ color: 0x1d2b24, roughness: 0.82 }));
-  const hoseCreamMat = track(new THREE.MeshStandardMaterial({ color: 0xebe4d2, roughness: 0.86 }));
   const droneWoodMat = track(new THREE.MeshStandardMaterial({ color: 0x1d1410, roughness: 0.45 }));
 
   const piperGroup = new THREE.Group();
   const piperBodyPivot = new THREE.Group();
   piperGroup.add(piperBodyPivot);
 
-  // Legs with bare knees, Highland cream hose, red flashes & dark brogues
-  const piperLegs: THREE.Group[] = [];
-  [-0.095, 0.095].forEach((lx) => {
-    const lPivot = new THREE.Group();
-    lPivot.position.set(lx, 0.72, 0);
-    const knee = new THREE.Mesh(track(new THREE.CylinderGeometry(0.068, 0.062, 0.24, 8)), skinMat);
-    knee.position.set(0, -0.14, 0);
-    const hose = new THREE.Mesh(track(new THREE.CylinderGeometry(0.064, 0.052, 0.36, 8)), hoseCreamMat);
-    hose.position.set(0, -0.44, 0);
-    hose.castShadow = true;
-    const flash = new THREE.Mesh(track(new THREE.BoxGeometry(0.03, 0.09, 0.025)), barrierRedMat);
-    flash.position.set(lx > 0 ? 0.06 : -0.06, -0.32, 0.02);
-    const brogue = new THREE.Mesh(bootGeo, leatherBootMat);
-    brogue.position.set(0, -0.66, 0.035);
-    lPivot.add(knee, hose, flash, brogue);
-    piperBodyPivot.add(lPivot);
-    piperLegs.push(lPivot);
-  });
+  const piperRig = charPool.buildHuman('piper', 0);
+  piperBodyPivot.add(piperRig.group);
 
-  // Tartan Kilt + Leather & Fur Sporran
-  const kilt = new THREE.Mesh(track(new THREE.CylinderGeometry(0.165, 0.275, 0.48, 14)), tartanMat);
-  kilt.position.set(0, 0.78, 0);
-  kilt.castShadow = true;
-  const sporran = new THREE.Mesh(track(new THREE.BoxGeometry(0.13, 0.17, 0.06)), hoseCreamMat);
-  sporran.position.set(0, 0.78, 0.22);
-  const sporranTop = new THREE.Mesh(track(new THREE.BoxGeometry(0.135, 0.045, 0.065)), leatherBootMat);
-  sporranTop.position.set(0, 0.87, 0.22);
-  piperBodyPivot.add(kilt, sporran, sporranTop);
+  const piperLegs = [piperRig.leftLeg, piperRig.rightLeg];
+  const piperKnees = [piperRig.leftKnee, piperRig.rightKnee];
+  const piperHead = piperRig.headPivot;
+  const piperArms = [piperRig.leftArm, piperRig.rightArm];
+  const piperElbows = [piperRig.leftElbow, piperRig.rightElbow];
+  piperArms[0].rotation.set(-0.34, 0, 0.25);
+  piperArms[1].rotation.set(-0.38, 0, -0.35);
+  piperElbows[0].rotation.x = -0.68;
+  piperElbows[1].rotation.x = -0.76;
 
-  // Argyll Jacket + Tartan Shoulder Plaid + Waist Belt
-  const piperTorso = new THREE.Mesh(track(new THREE.BoxGeometry(0.36, 0.48, 0.21)), kiltJacketMat);
-  piperTorso.position.set(0, 1.24, 0);
-  piperTorso.castShadow = true;
-  const piperBelt = new THREE.Mesh(track(new THREE.BoxGeometry(0.37, 0.06, 0.225)), leatherBootMat);
-  piperBelt.position.set(0, 1.01, 0);
-  const buckle = new THREE.Mesh(track(new THREE.BoxGeometry(0.08, 0.07, 0.03)), brassMat);
-  buckle.position.set(0, 1.01, 0.12);
-  const plaidSash = new THREE.Mesh(track(new THREE.BoxGeometry(0.14, 0.56, 0.23)), tartanMat);
-  plaidSash.position.set(-0.04, 1.24, 0);
-  plaidSash.rotation.z = 0.52;
-  piperBodyPivot.add(piperTorso, piperBelt, buckle, plaidSash);
-
-  // Head + Ginger Beard + Scottish Glengarry Bonnet
-  const piperHead = new THREE.Group();
-  piperHead.position.set(0, 1.54, 0);
-  const pNeck = new THREE.Mesh(neckGeo, skinMat);
-  pNeck.position.set(0, -0.06, 0);
-  const pSkull = new THREE.Mesh(headGeo, skinMat);
-  pSkull.position.set(0, 0.05, 0);
-  pSkull.castShadow = true;
-  const pNose = new THREE.Mesh(noseGeo, skinMat);
-  pNose.position.set(0, 0.04, 0.11);
-  const beardMat = track(new THREE.MeshStandardMaterial({ color: 0xa44b24, roughness: 0.88 }));
-  const pBeard = new THREE.Mesh(track(new THREE.BoxGeometry(0.13, 0.11, 0.09)), beardMat);
-  pBeard.position.set(0, -0.02, 0.085);
-  const bonnet = new THREE.Mesh(track(new THREE.BoxGeometry(0.13, 0.11, 0.27)), kiltJacketMat);
-  bonnet.position.set(0, 0.15, -0.01);
-  bonnet.rotation.z = -0.14;
-  const bonnetBand = new THREE.Mesh(track(new THREE.BoxGeometry(0.138, 0.035, 0.275)), tartanMat);
-  bonnetBand.position.set(0, 0.11, -0.01);
-  bonnetBand.rotation.z = -0.14;
-  const toorie = new THREE.Mesh(track(new THREE.SphereGeometry(0.028, 6, 6)), barrierRedMat);
-  toorie.position.set(0.02, 0.21, 0.02);
-  piperHead.add(pNeck, pSkull, pNose, pBeard, bonnet, bonnetBand, toorie);
-  piperBodyPivot.add(piperHead);
-
-  // Arms + Great Highland Bagpipes (tartan bag, blowpipe, chanter, 3 brass-ferruled drones)
-  const piperArms: THREE.Group[] = [];
-  [-0.22, 0.22].forEach((ax) => {
-    const aPivot = new THREE.Group();
-    aPivot.position.set(ax, 1.42, 0);
-    const sleeve = new THREE.Mesh(track(new THREE.CylinderGeometry(0.052, 0.042, 0.48, 8)), kiltJacketMat);
-    sleeve.position.set(0, -0.22, 0);
-    sleeve.castShadow = true;
-    const hand = new THREE.Mesh(handGeo, skinMat);
-    hand.position.set(0, -0.47, 0);
-    aPivot.add(sleeve, hand);
-    piperBodyPivot.add(aPivot);
-    piperArms.push(aPivot);
-  });
-  piperArms[0].rotation.set(-0.78, 0, 0.25);
-  piperArms[1].rotation.set(-0.85, 0, -0.35);
-
+  // Great Highland Bagpipes (tartan bag, blowpipe, chanter, 3 brass-ferruled drones)
   const pipesGroup = new THREE.Group();
-  pipesGroup.position.set(-0.14, 1.26, 0.18);
-  const airbag = new THREE.Mesh(track(new THREE.SphereGeometry(0.16, 10, 8)), tartanMat);
+  pipesGroup.position.set(-0.14, 1.24, 0.18);
+  const airbag = new THREE.Mesh(track(new THREE.SphereGeometry(0.16, 12, 10)), tartanMat);
   airbag.scale.set(0.85, 0.92, 1.38);
   airbag.castShadow = true;
   const chanter = new THREE.Mesh(track(new THREE.CylinderGeometry(0.016, 0.028, 0.42, 8)), droneWoodMat);
@@ -1556,7 +1326,7 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
   const droneSpecs: [number, number, number, number][] = [
     [-0.08, 0.38, -0.24, 0.72], // Bass drone
     [-0.02, 0.30, -0.16, 0.52], // Tenor drone 1
-    [0.04, 0.30, -0.09, 0.52],  // Tenor drone 2
+    [0.04, 0.30, -0.09, 0.52], // Tenor drone 2
   ];
   droneSpecs.forEach(([dx, dy, dz, len]) => {
     const drone = new THREE.Mesh(track(new THREE.CylinderGeometry(0.018, 0.015, len, 8)), droneWoodMat);
@@ -1569,7 +1339,7 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
     bell.rotation.z = 0.18;
     pipesGroup.add(drone, bell);
   });
-  piperBodyPivot.add(pipesGroup);
+  piperRig.group.add(pipesGroup);
 
   const piper = {
     x: -10,
@@ -1607,18 +1377,24 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
       for (let i = 0; i < spectators.length; i++) {
         const sp = spectators[i];
         if (sp.mode === 'cheering') {
-          sp.arms[0].rotation.x = -2.1 + Math.sin(elapsed * 4.8 + sp.phase) * 0.42;
+          sp.arms[0].rotation.x = -2.0 + Math.sin(elapsed * 4.8 + sp.phase) * 0.42;
+          sp.elbows[0].rotation.x = -0.35 + Math.cos(elapsed * 4.8 + sp.phase) * 0.18;
           sp.arms[1].rotation.x = -0.35 + Math.cos(elapsed * 3.2 + sp.phase) * 0.18;
+          sp.elbows[1].rotation.x = -0.25;
           sp.head.rotation.y = Math.sin(elapsed * 1.8 + sp.phase) * 0.16;
         } else if (sp.mode === 'discussing') {
-          sp.arms[0].rotation.x = -0.85 + Math.sin(elapsed * 3.8 + sp.phase) * 0.28;
+          sp.arms[0].rotation.x = -0.65 + Math.sin(elapsed * 3.8 + sp.phase) * 0.25;
           sp.arms[0].rotation.z = -0.18 + Math.cos(elapsed * 2.6 + sp.phase) * 0.12;
-          sp.arms[1].rotation.x = -0.45 + Math.cos(elapsed * 2.9 + sp.phase) * 0.22;
+          sp.elbows[0].rotation.x = -0.68 + Math.sin(elapsed * 3.8 + sp.phase) * 0.15;
+          sp.arms[1].rotation.x = -0.35 + Math.cos(elapsed * 2.9 + sp.phase) * 0.2;
+          sp.elbows[1].rotation.x = -0.45;
           sp.head.rotation.x = Math.sin(elapsed * 2.4 + sp.phase) * 0.14;
           sp.head.rotation.y = Math.sin(elapsed * 1.5 + sp.phase * 1.3) * 0.28;
         } else {
           sp.arms[0].rotation.x = Math.sin(elapsed * 1.4 + sp.phase) * 0.08;
+          sp.elbows[0].rotation.x = -0.15;
           sp.arms[1].rotation.x = -Math.sin(elapsed * 1.4 + sp.phase) * 0.08;
+          sp.elbows[1].rotation.x = -0.15;
           sp.head.rotation.y = Math.sin(elapsed * 0.9 + sp.phase) * 0.24;
         }
       }
@@ -1651,8 +1427,12 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
           w.group.rotation.y = Math.atan2(pX - curX, pZ - curZ);
           w.leftLeg.rotation.x = THREE.MathUtils.damp(w.leftLeg.rotation.x, 0, 12, dt);
           w.rightLeg.rotation.x = THREE.MathUtils.damp(w.rightLeg.rotation.x, 0, 12, dt);
-          w.leftArm.rotation.x = -2.1 + Math.sin(elapsed * 8 + w.phase) * 0.35;
-          w.rightArm.rotation.x = -1.9 + Math.cos(elapsed * 8 + w.phase) * 0.35;
+          w.leftKnee.rotation.x = THREE.MathUtils.damp(w.leftKnee.rotation.x, 0, 12, dt);
+          w.rightKnee.rotation.x = THREE.MathUtils.damp(w.rightKnee.rotation.x, 0, 12, dt);
+          w.leftArm.rotation.x = -1.9 + Math.sin(elapsed * 8 + w.phase) * 0.35;
+          w.rightArm.rotation.x = -1.7 + Math.cos(elapsed * 8 + w.phase) * 0.35;
+          w.leftElbow.rotation.x = -0.45;
+          w.rightElbow.rotation.x = -0.45;
         } else {
           w.progress += (w.speed / segLen) * dt * w.dir;
           if (w.progress >= 1) {
@@ -1670,11 +1450,16 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
           const dirZ = (w.z2 - w.z1) * w.dir;
           w.group.rotation.y = Math.atan2(dirX, dirZ);
 
-          const stride = Math.sin(elapsed * w.speed * 4.5 + w.phase) * 0.48;
+          const phase = elapsed * w.speed * 4.5 + w.phase;
+          const stride = Math.sin(phase) * 0.48;
           w.leftLeg.rotation.x = stride;
           w.rightLeg.rotation.x = -stride;
-          w.leftArm.rotation.x = -stride * 0.7;
-          w.rightArm.rotation.x = stride * 0.7;
+          w.leftKnee.rotation.x = Math.max(0, -Math.cos(phase)) * 0.48;
+          w.rightKnee.rotation.x = Math.max(0, Math.cos(phase)) * 0.48;
+          w.leftArm.rotation.x = -stride * 0.65;
+          w.rightArm.rotation.x = stride * 0.65;
+          w.leftElbow.rotation.x = -0.25 - Math.max(0, -stride) * 0.25;
+          w.rightElbow.rotation.x = -0.25 - Math.max(0, stride) * 0.25;
         }
       }
 
@@ -1826,16 +1611,21 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
         dg.group.position.set(dg.x, groundY + hopY, dg.z);
         dg.group.rotation.y = dg.yaw;
 
-        // Stride / gallop animation
+        // Stride / gallop animation with knee flexion
         if (dg.speed > 0.4) {
           const gallop = Math.sin(elapsed * 14 + dg.phase) * 0.68;
           dg.legs[0].rotation.x = gallop;
           dg.legs[1].rotation.x = gallop * 0.85;
           dg.legs[2].rotation.x = -gallop;
           dg.legs[3].rotation.x = -gallop * 0.85;
+          dg.knees[0].rotation.x = Math.max(0, -gallop) * 0.55;
+          dg.knees[1].rotation.x = Math.max(0, -gallop) * 0.5;
+          dg.knees[2].rotation.x = Math.max(0, gallop) * 0.55;
+          dg.knees[3].rotation.x = Math.max(0, gallop) * 0.5;
         } else {
           for (let l = 0; l < 4; l++) {
             dg.legs[l].rotation.x = THREE.MathUtils.damp(dg.legs[l].rotation.x, 0, 10, dt);
+            dg.knees[l].rotation.x = THREE.MathUtils.damp(dg.knees[l].rotation.x, 0, 10, dt);
           }
         }
 
@@ -1949,11 +1739,16 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
           sh.legs[1].rotation.x = boundStride * 0.9;
           sh.legs[2].rotation.x = -boundStride;
           sh.legs[3].rotation.x = -boundStride * 0.9;
+          sh.knees[0].rotation.x = Math.max(0, -boundStride) * 0.45;
+          sh.knees[1].rotation.x = Math.max(0, -boundStride) * 0.42;
+          sh.knees[2].rotation.x = Math.max(0, boundStride) * 0.45;
+          sh.knees[3].rotation.x = Math.max(0, boundStride) * 0.42;
           sh.head.rotation.x = -0.14 + Math.sin(elapsed * 10 + sh.phase) * 0.12;
           sh.tail.rotation.x = Math.sin(elapsed * 14 + sh.phase) * 0.28;
         } else {
           for (let l = 0; l < 4; l++) {
             sh.legs[l].rotation.x = THREE.MathUtils.damp(sh.legs[l].rotation.x, 0, 8, dt);
+            sh.knees[l].rotation.x = THREE.MathUtils.damp(sh.knees[l].rotation.x, 0, 8, dt);
           }
           sh.head.rotation.x = 0.45 + Math.sin(elapsed * 1.9 + sh.phase) * 0.18;
         }
@@ -1992,6 +1787,10 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
         md.horseLegs[1].rotation.x = -trot;
         md.horseLegs[2].rotation.x = -trot;
         md.horseLegs[3].rotation.x = trot;
+        md.horseKnees[0].rotation.x = Math.max(0, -trot) * 0.42;
+        md.horseKnees[1].rotation.x = Math.max(0, trot) * 0.42;
+        md.horseKnees[2].rotation.x = Math.max(0, trot) * 0.42;
+        md.horseKnees[3].rotation.x = Math.max(0, -trot) * 0.42;
         md.head.rotation.x = 0.1 + Math.sin(elapsed * 3.2) * 0.12;
         md.tail.rotation.z = Math.sin(elapsed * 4.5) * 0.22;
         for (let w = 0; w < md.cartWheels.length; w++) {
@@ -2010,6 +1809,7 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
         const pos = sampleCircuitLoop(mc.progress, mc.laneOffset);
         mc.x = pos.x;
         mc.z = pos.z;
+        mc.yaw = pos.yaw;
         const cy = getTerrainHeightAndSurface(pos.x, pos.z).height;
         mc.group.position.set(pos.x, cy, pos.z);
         mc.group.rotation.y = pos.yaw;
@@ -2024,6 +1824,41 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
         }
         obstacles[obsOffset + i].x = pos.x;
         obstacles[obsOffset + i].z = pos.z;
+      }
+
+      // Animate 1914 Edwardian cyclists along outer kerbside loop
+      const cycOffset = obsOffset + movingCars.length;
+      for (let i = 0; i < movingCyclists.length; i++) {
+        const cyc = movingCyclists[i];
+        cyc.progress = (cyc.progress + cyc.speedMps * dt) % TOTAL_LOOP_LEN;
+        const pos = sampleCircuitLoop(cyc.progress, cyc.laneOffset);
+        const cy = getTerrainHeightAndSurface(pos.x, pos.z).height;
+        cyc.group.position.set(pos.x, cy, pos.z);
+        cyc.group.rotation.y = pos.yaw;
+        for (let w = 0; w < cyc.wheels.length; w++) {
+          cyc.wheels[w].rotation.x += (cyc.speedMps / 0.32) * dt;
+        }
+        const pedalPhase = elapsed * cyc.speedMps * 2.1 + cyc.phase;
+        cyc.leftLeg.rotation.x = -0.5 + Math.sin(pedalPhase) * 0.42;
+        cyc.rightLeg.rotation.x = -0.5 - Math.sin(pedalPhase) * 0.42;
+        cyc.leftKnee.rotation.x = 0.55 + Math.max(0, -Math.sin(pedalPhase)) * 0.45;
+        cyc.rightKnee.rotation.x = 0.55 + Math.max(0, Math.sin(pedalPhase)) * 0.45;
+        obstacles[cycOffset + i].x = pos.x;
+        obstacles[cycOffset + i].z = pos.z;
+      }
+
+      // Animate Constable Finch watching Thames North speed trap with pocket watch
+      const distTrap = Math.hypot(pX - SPEED_TRAP_ZONE.constableX, pZ - SPEED_TRAP_ZONE.constableZ);
+      const fastAlert = distTrap < 24 && pSpeed > 9.6;
+      constableFinch.rightArm.rotation.x = fastAlert ? -2.1 + Math.sin(elapsed * 9) * 0.25 : -0.75;
+      constableFinch.rightElbow.rotation.x = fastAlert ? -0.35 : -0.65;
+      constableFinch.leftArm.rotation.x = -0.65;
+      constableFinch.leftElbow.rotation.x = -0.75;
+      constableFinch.headPivot.rotation.y = fastAlert ? 0 : Math.sin(elapsed * 1.2) * 0.25;
+      if (distTrap < 28) {
+        constableFinch.group.rotation.y = Math.atan2(pX - SPEED_TRAP_ZONE.constableX, pZ - SPEED_TRAP_ZONE.constableZ);
+      } else {
+        constableFinch.group.rotation.y = -Math.PI / 2;
       }
 
       // Coastal seagulls wheeling above harbour
@@ -2068,8 +1903,13 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
         piperBodyPivot.rotation.z = THREE.MathUtils.damp(piperBodyPivot.rotation.z, 0, 12, dt);
         piperBodyPivot.position.y = THREE.MathUtils.damp(piperBodyPivot.position.y, 0, 12, dt);
 
-        // Check collision / run-over hit
-        if (distPiperCar < 1.58 && pSpeed > 1.8) {
+        // Check collision / run-over hit across car center and front/rear bumpers
+        const fwdCarX = Math.sin(pYaw);
+        const fwdCarZ = Math.cos(pYaw);
+        const distFrontBumper = Math.hypot(pX + fwdCarX * 1.25 - piper.x, pZ + fwdCarZ * 1.25 - piper.z);
+        const distRearBumper = Math.hypot(pX - fwdCarX * 1.25 - piper.x, pZ - fwdCarZ * 1.25 - piper.z);
+        const piperHit = pSpeed > 0.75 && (distPiperCar < 1.95 || distFrontBumper < 1.32 || distRearBumper < 1.25);
+        if (piperHit) {
           piper.state = 'down';
           piper.downTimer = 6.5;
           piper.panicTimer = 0;
@@ -2079,16 +1919,14 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
           piper.justHit = true;
 
           const pushA = Math.atan2(piper.x - pX, piper.z - pZ);
-          piper.x = pX + Math.sin(pushA) * 1.75;
-          piper.z = pZ + Math.cos(pushA) * 1.75;
+          piper.x = pX + Math.sin(pushA) * 1.95;
+          piper.z = pZ + Math.cos(pushA) * 1.95;
           piper.yaw = pushA;
         } else {
           // Determine whether the Model T is trying to run him over or rushing near him
           const toPiperX = (piper.x - pX) / (distPiperCar || 1);
           const toPiperZ = (piper.z - pZ) / (distPiperCar || 1);
-          const carDirX = Math.sin(pYaw);
-          const carDirZ = Math.cos(pYaw);
-          const aimedAtPiper = toPiperX * carDirX + toPiperZ * carDirZ > 0.25;
+          const aimedAtPiper = toPiperX * fwdCarX + toPiperZ * fwdCarZ > 0.25;
           const threatClose =
             distPiperCar < 12.5 ||
             (distPiperCar < 24 && pSpeed > 2.2 && aimedAtPiper) ||
@@ -2113,15 +1951,15 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
             const awayLen = Math.hypot(awayX, awayZ) || 1;
             const perpX = -awayZ / awayLen;
             const perpZ = awayX / awayLen;
-            // Dodge sideways slightly as car closes in while sprinting fast away
-            const dodgeWeight = distPiperCar < 10 ? 0.52 * piper.dodgeSeed : 0.18 * piper.dodgeSeed;
+            // Dodge sideways slightly while sprinting fast enough to chase down
+            const dodgeWeight = distPiperCar < 10 ? 0.30 * piper.dodgeSeed : 0.14 * piper.dodgeSeed;
             let desX = awayX / awayLen + perpX * dodgeWeight;
             let desZ = awayZ / awayLen + perpZ * dodgeWeight;
             const desLen = Math.hypot(desX, desZ) || 1;
             desX /= desLen;
             desZ /= desLen;
 
-            const fleeSpeed = distPiperCar < 11 ? 7.3 : 6.2;
+            const fleeSpeed = distPiperCar < 10 ? 5.2 : 4.5;
             piper.vx = THREE.MathUtils.damp(piper.vx, desX * fleeSpeed, 9.5, dt);
             piper.vz = THREE.MathUtils.damp(piper.vz, desZ * fleeSpeed, 9.5, dt);
             piper.panicLevel = Math.max(0.35, Math.min(1, 1.15 - distPiperCar / 26));
@@ -2137,7 +1975,7 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
           }
 
           let nextPx = THREE.MathUtils.clamp(piper.x + piper.vx * dt, -158, 102);
-          let nextPz = THREE.MathUtils.clamp(piper.z + piper.vz * dt, -74, 124);
+          let nextPz = THREE.MathUtils.clamp(piper.z + piper.vz * dt, -152, 200);
 
           // Keep bagpiper out of buildings, blockades & crates
           for (let c = 0; c < WORLD_COLLIDERS.length; c++) {
@@ -2192,22 +2030,29 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
           const pSpeedMag = Math.hypot(piper.vx, piper.vz);
           const strideRate = piper.state === 'fleeing' ? 17.5 : 5.2;
           const strideAmp = piper.state === 'fleeing' ? 0.88 : 0.36;
-          const stride = pSpeedMag > 0.2 ? Math.sin(elapsed * strideRate) * strideAmp : 0;
+          const stridePhase = elapsed * strideRate;
+          const stride = pSpeedMag > 0.2 ? Math.sin(stridePhase) * strideAmp : 0;
           piperLegs[0].rotation.x = stride;
           piperLegs[1].rotation.x = -stride;
+          piperKnees[0].rotation.x = pSpeedMag > 0.2 ? Math.max(0, -Math.cos(stridePhase)) * (piper.state === 'fleeing' ? 0.95 : 0.42) : 0;
+          piperKnees[1].rotation.x = pSpeedMag > 0.2 ? Math.max(0, Math.cos(stridePhase)) * (piper.state === 'fleeing' ? 0.95 : 0.42) : 0;
 
           if (piper.state === 'fleeing') {
             pipesGroup.rotation.z = Math.sin(elapsed * 22) * 0.16;
             pipesGroup.rotation.x = Math.cos(elapsed * 18) * 0.12;
             piperHead.rotation.y = Math.sin(elapsed * 12) * 0.42;
-            piperArms[0].rotation.x = -0.82 + Math.sin(elapsed * 18) * 0.25;
-            piperArms[1].rotation.x = -0.85 + Math.cos(elapsed * 18) * 0.25;
+            piperArms[0].rotation.x = -0.36 + Math.sin(elapsed * 18) * 0.25;
+            piperArms[1].rotation.x = -0.4 + Math.cos(elapsed * 18) * 0.25;
+            piperElbows[0].rotation.x = -0.68 + Math.sin(elapsed * 18) * 0.15;
+            piperElbows[1].rotation.x = -0.76 + Math.cos(elapsed * 18) * 0.15;
           } else {
             pipesGroup.rotation.z = Math.sin(elapsed * 2.4) * 0.04;
             pipesGroup.rotation.x = 0;
             piperHead.rotation.y = Math.sin(elapsed * 1.4) * 0.15;
-            piperArms[0].rotation.x = -0.78 + Math.sin(elapsed * 4.5) * 0.05;
-            piperArms[1].rotation.x = -0.85 + Math.cos(elapsed * 4.5) * 0.06;
+            piperArms[0].rotation.x = -0.34 + Math.sin(elapsed * 4.5) * 0.05;
+            piperArms[1].rotation.x = -0.38 + Math.cos(elapsed * 4.5) * 0.06;
+            piperElbows[0].rotation.x = -0.68;
+            piperElbows[1].rotation.x = -0.76;
           }
         }
       }
@@ -2224,6 +2069,7 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
     },
     getObstacles: () => obstacles,
     getRivalMapPoints: () => movingCars.map((mc) => ({ x: mc.x, z: mc.z })),
+    getRivalCarStates: () => movingCars.map((mc) => ({ x: mc.x, z: mc.z, yaw: mc.yaw })),
     getPiperMapPoint: () => ({ x: piper.x, z: piper.z, down: piper.state === 'down' }),
     getRacePosition: (px: number, pz: number, playerLap: number): number => {
       // Project player onto closest circuit segment to measure loop distance from Start Line (-56, 0)
@@ -2352,7 +2198,7 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
       const otherCarProximity = Math.max(0, Math.min(1, 1 - (bestCarDist - 3) / 15));
       const harbourProximity = Math.max(0, Math.min(1, (px - 35) / 70));
       const trainProximity = Math.max(0, Math.min(1, 1 - (trainDist - 8) / 56));
-      const piperProximity = Math.max(0, Math.min(1, 1 - (piperDist - 3) / 45));
+      const piperProximity = Math.max(0, Math.min(1, 1 - (piperDist - 4) / 78));
 
       return {
         crowdProximity,

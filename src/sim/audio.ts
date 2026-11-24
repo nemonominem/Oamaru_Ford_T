@@ -4,6 +4,7 @@ import { EnvironmentState, VehicleState } from './types';
 export class ModelTAudioEngine {
   private ctx: AudioContext | null = null;
   private masterGain: GainNode | null = null;
+  private recordDest: MediaStreamAudioDestinationNode | null = null;
 
   // Vehicle & Surface
   private engineOsc: OscillatorNode | null = null;
@@ -87,13 +88,42 @@ export class ModelTAudioEngine {
   private nextHorseSnortAt = 0;
   private nextTrainWhistleAt = 9.0;
   private nextCrankChugAt = 0;
+  private nextFoghornAt = 18.0;
 
   private wasEngineRunning = false;
   private engineShutoffUntil = 0;
   private wasCoilActive = false;
+  private wasPiperDown = false;
 
   private muted = false;
   private initialized = false;
+  private cachedVoices: SpeechSynthesisVoice[] = [];
+  private voicesListenerBound = false;
+
+  private refreshVoices = (): void => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    try {
+      const list = window.speechSynthesis.getVoices();
+      if (list && list.length > 0) {
+        this.cachedVoices = list;
+      }
+    } catch {
+      // ignore restricted environments
+    }
+  };
+
+  private bindVoiceListener(): void {
+    if (this.voicesListenerBound || typeof window === 'undefined' || !('speechSynthesis' in window)) {
+      return;
+    }
+    this.voicesListenerBound = true;
+    this.refreshVoices();
+    try {
+      window.speechSynthesis.addEventListener?.('voiceschanged', this.refreshVoices);
+    } catch {
+      // ignore if speechSynthesis event listener unavailable
+    }
+  }
 
   private connectWithOptionalPan(
     source: AudioNode,
@@ -111,6 +141,7 @@ export class ModelTAudioEngine {
   }
 
   public init(): void {
+    this.bindVoiceListener();
     if (this.initialized) {
       if (this.ctx && this.ctx.state === 'suspended') {
         void this.ctx.resume();
@@ -307,7 +338,7 @@ export class ModelTAudioEngine {
     crowdFormantMid.Q.value = 2.1;
 
     const crowdGain = ctx.createGain();
-    crowdGain.gain.value = 0.02;
+    crowdGain.gain.value = 0;
 
     const chatterLfo = ctx.createOscillator();
     chatterLfo.type = 'sine';
@@ -348,7 +379,7 @@ export class ModelTAudioEngine {
     cityAmbFilter.frequency.value = 520;
     cityAmbFilter.Q.value = 0.7;
     const cityAmbGain = ctx.createGain();
-    cityAmbGain.gain.value = 0.02;
+    cityAmbGain.gain.value = 0;
     citySrc.connect(cityAmbFilter);
     cityAmbFilter.connect(cityAmbGain);
     cityAmbGain.connect(master);
@@ -504,21 +535,23 @@ export class ModelTAudioEngine {
     this.nightHumNoiseSource = nightNoise;
     this.nightHumGain = nightHumGain;
 
-    // Highland Bagpipes (reedy bandpass formant on 3 drones + chanter)
+    // Highland Bagpipes (warm reedy peaking resonance + lowpass so Bb bass/tenor drones ring strongly alongside the chanter)
     const pipeFormant = ctx.createBiquadFilter();
-    pipeFormant.type = 'bandpass';
-    pipeFormant.frequency.value = 1150;
-    pipeFormant.Q.value = 1.35;
+    pipeFormant.type = 'peaking';
+    pipeFormant.frequency.value = 1120;
+    pipeFormant.Q.value = 1.15;
+    pipeFormant.gain.value = 7.5;
 
     const pipeLowpass = ctx.createBiquadFilter();
     pipeLowpass.type = 'lowpass';
-    pipeLowpass.frequency.value = 2800;
+    pipeLowpass.frequency.value = 3200;
+    pipeLowpass.Q.value = 1.1;
 
     const pipeGain = ctx.createGain();
     pipeGain.gain.value = 0;
 
     const droneGain = ctx.createGain();
-    droneGain.gain.value = 0.42;
+    droneGain.gain.value = 0.56;
 
     const dBass = ctx.createOscillator();
     dBass.type = 'sawtooth';
@@ -537,7 +570,7 @@ export class ModelTAudioEngine {
     chanterOsc.frequency.value = 466.16; // Bb4 chanter
 
     const chanterGain = ctx.createGain();
-    chanterGain.gain.value = 0.72;
+    chanterGain.gain.value = 0.86;
 
     dBass.connect(droneGain);
     dTenor1.connect(droneGain);
@@ -589,6 +622,157 @@ export class ModelTAudioEngine {
     return this.muted;
   }
 
+  private playConstableWhistleCue(volumeScale: number): void {
+    if (!this.ctx || !this.masterGain || this.muted) return;
+    const now = this.ctx.currentTime;
+    const vol = Math.min(0.08, Math.max(0.025, volumeScale * 0.065));
+
+    const playTone = (freqStart: number, freqEnd: number, delaySec: number, durSec: number, amp: number) => {
+      if (!this.ctx || !this.masterGain) return;
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freqStart, now + delaySec);
+      osc.frequency.exponentialRampToValueAtTime(Math.max(80, freqEnd), now + delaySec + durSec);
+      g.gain.setValueAtTime(0.001, now + delaySec);
+      g.gain.linearRampToValueAtTime(amp, now + delaySec + 0.015);
+      g.gain.exponentialRampToValueAtTime(0.001, now + delaySec + durSec);
+      osc.connect(g);
+      g.connect(this.masterGain);
+      osc.start(now + delaySec);
+      osc.stop(now + delaySec + durSec + 0.02);
+    };
+
+    playTone(2360, 2610, 0.0, 0.07, vol);
+    playTone(2550, 2240, 0.085, 0.085, vol);
+  }
+
+  private formatSpeechText(raw: string): string {
+    return raw
+      .replace(/\bSt\./g, 'Street')
+      .replace(/\bDr\./g, 'Doctor')
+      .replace(/\bMr\./g, 'Mister')
+      .replace(/\bMrs\./g, 'Missus')
+      .replace(/\b(\d+)\s*d\b/gi, '$1 pence')
+      .replace(/\bmph\b/gi, 'miles per hour')
+      .replace(/\.{3}/g, ', ')
+      .replace(/[—–]/g, ', ');
+  }
+
+  private resolveCharacterSpeechSpec(
+    role: string,
+    isScolding: boolean,
+    voices: SpeechSynthesisVoice[]
+  ): { voice: SpeechSynthesisVoice | null; pitch: number; rate: number } {
+    const english = voices.filter((v) => /^en/i.test(v.lang));
+    const rawPool = english.length > 0 ? english : voices;
+
+    // Exclude legacy novelty/robotic synths whenever natural voices exist
+    const roboticRx =
+      /(espeak|festival|albert|bad news|bahh|bells|boing|bubbles|cellos|deranged|fred|good news|hysterical|junior|pipe organ|trinoids|whisper|zarvox|jester|superstar|organ)/i;
+    const cleanPool = rawPool.filter((v) => !roboticRx.test(v.name));
+    const pool = cleanPool.length > 0 ? cleanPool : rawPool;
+
+    const femaleHint =
+      /\b(samantha|karen|victoria|kate|serena|tessa|moira|fiona|veena|allison|ava|susan|zira|hazel|libby|sonia|natasha|clara|mia|molly|emma|amy|jenny|aria|joanna|salli|kimberly|female|woman|girl|catherine|stephanie|alice|ellen|kathy|melody|nicky|shelley|sandy|flo)\b/i;
+    const maleHint =
+      /\b(daniel|arthur|oliver|gordon|george|ryan|william|james|david|mark|alex|tom|lee|rishi|guy|christopher|eric|brian|matthew|justin|male|man|rory|thomas|edward|mitchell|eddy|reed|rocko)\b/i;
+
+    const voiceQualityScore = (v: SpeechSynthesisVoice): number => {
+      let score = 0;
+      // Regional authenticity for 1914 Otago NZ
+      if (/en[-_]NZ/i.test(v.lang)) score += 60;
+      else if (/en[-_]AU/i.test(v.lang)) score += 48;
+      else if (/en[-_]GB/i.test(v.lang)) score += 42;
+      else if (/en[-_]IE|en[-_]ZA|en[-_]SC/i.test(v.lang)) score += 32;
+      else score += 16;
+
+      // Prefer neural / natural / enhanced voices over flat legacy desktop voices
+      if (/(natural|neural|online)/i.test(v.name)) score += 90;
+      if (/(enhanced|premium|siri|google)/i.test(v.name)) score += 65;
+      if (/\b(libby|sonia|ryan|aria|jenny|natasha|william|molly|mitchell|daniel|samantha|karen|serena|oliver|kate|tessa|moira|fiona)\b/i.test(v.name)) {
+        score += 38;
+      }
+      if (!v.localService) score += 14;
+      return score;
+    };
+
+    const sortByNaturalQuality = (arr: SpeechSynthesisVoice[]) =>
+      [...arr].sort((a, b) => voiceQualityScore(b) - voiceQualityScore(a));
+
+    const sortedAll = sortByNaturalQuality(pool);
+    const femaleVoices = sortByNaturalQuality(pool.filter((v) => femaleHint.test(v.name)));
+    const maleVoices = sortByNaturalQuality(pool.filter((v) => maleHint.test(v.name) && !femaleHint.test(v.name)));
+
+    const pickFrom = (preferred: SpeechSynthesisVoice[], slot: number): SpeechSynthesisVoice | null => {
+      if (preferred.length > 0) return preferred[slot % preferred.length];
+      if (sortedAll.length > 0) return sortedAll[slot % sortedAll.length];
+      return null;
+    };
+
+    const jitter = () => (Math.random() - 0.5) * 0.04;
+    const clampPitch = (p: number) => Math.max(0.84, Math.min(1.18, p));
+    const clampRate = (r: number) => Math.max(0.90, Math.min(1.08, r));
+
+    const norm = role.toLowerCase();
+    if (norm === 'lady') {
+      return {
+        voice: pickFrom(femaleVoices, 0),
+        pitch: clampPitch((isScolding ? 1.13 : 1.07) + jitter()),
+        rate: clampRate((isScolding ? 1.03 : 0.96) + jitter() * 0.5),
+      };
+    }
+    if (norm === 'schoolboy') {
+      const youthList = femaleVoices.length > 1 ? [femaleVoices[1], femaleVoices[0]] : sortedAll;
+      return {
+        voice: pickFrom(youthList, 0),
+        pitch: clampPitch(1.15 + jitter()),
+        rate: clampRate(1.05 + jitter() * 0.5),
+      };
+    }
+    if (norm === 'newsboy') {
+      const youthList = femaleVoices.length > 0 ? femaleVoices : sortedAll;
+      return {
+        voice: pickFrom(youthList, 1),
+        pitch: clampPitch(1.12 + jitter()),
+        rate: clampRate(1.06 + jitter() * 0.5),
+      };
+    }
+    if (norm === 'captain') {
+      return {
+        voice: pickFrom(maleVoices, 0),
+        pitch: clampPitch(0.86 + jitter()),
+        rate: clampRate(0.92 + jitter() * 0.5),
+      };
+    }
+    if (norm === 'constable') {
+      return {
+        voice: pickFrom(maleVoices, 1),
+        pitch: clampPitch(0.9 + jitter()),
+        rate: clampRate((isScolding ? 1.02 : 0.95) + jitter() * 0.5),
+      };
+    }
+    if (norm === 'dockworker') {
+      return {
+        voice: pickFrom(maleVoices, 2),
+        pitch: clampPitch(0.92 + jitter()),
+        rate: clampRate((isScolding ? 1.04 : 0.98) + jitter() * 0.5),
+      };
+    }
+    if (norm === 'mechanic') {
+      return {
+        voice: pickFrom(maleVoices, 3),
+        pitch: clampPitch(0.97 + jitter()),
+        rate: clampRate(0.99 + jitter() * 0.5),
+      };
+    }
+    return {
+      voice: pickFrom(maleVoices, 4),
+      pitch: clampPitch((isScolding ? 1.03 : 0.99) + jitter()),
+      rate: clampRate((isScolding ? 1.02 : 0.96) + jitter() * 0.5),
+    };
+  }
+
   public speakStreetLine(
     text: string,
     role: string,
@@ -600,6 +784,7 @@ export class ModelTAudioEngine {
       this.playPassengerSheepBleat();
       return;
     }
+    this.bindVoiceListener();
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
     try {
       const synth = window.speechSynthesis;
@@ -609,36 +794,22 @@ export class ModelTAudioEngine {
         return;
       }
 
-      const utt = new SpeechSynthesisUtterance(text);
-      const voices = synth.getVoices();
-      const engVoice =
-        voices.find((v) => /en[-_](NZ|AU|GB)/i.test(v.lang)) ??
-        voices.find((v) => /^en/i.test(v.lang));
-      if (engVoice) utt.voice = engVoice;
-
-      if (role === 'Lady') {
-        utt.pitch = isScolding ? 1.32 : 1.18;
-      } else if (role === 'Newsboy') {
-        utt.pitch = 1.28;
-        utt.rate = 1.08;
-      } else if (role === 'Schoolboy') {
-        utt.pitch = 1.38;
-        utt.rate = 1.12;
-      } else if (role === 'Captain') {
-        utt.pitch = 0.78;
-        utt.rate = 0.94;
-      } else if (role === 'Mechanic') {
-        utt.pitch = 0.90;
-        utt.rate = 1.02;
-      } else if (role === 'Constable') {
-        utt.pitch = 0.84;
-        utt.rate = isScolding ? 1.05 : 0.96;
-      } else {
-        utt.pitch = isScolding ? 1.06 : 0.94;
-        utt.rate = isScolding ? 1.06 : 0.98;
+      if (isScolding && role.toLowerCase() === 'constable') {
+        this.playConstableWhistleCue(volumeScale);
       }
 
-      utt.volume = Math.max(0.25, Math.min(1.0, volumeScale));
+      const voices = synth.getVoices();
+      const activeVoices = voices.length > 0 ? voices : this.cachedVoices;
+      const profile = this.resolveCharacterSpeechSpec(role, isScolding, activeVoices);
+
+      const utt = new SpeechSynthesisUtterance(this.formatSpeechText(text));
+      if (profile.voice) {
+        utt.voice = profile.voice;
+        utt.lang = profile.voice.lang;
+      }
+      utt.pitch = profile.pitch;
+      utt.rate = profile.rate;
+      utt.volume = Math.max(0.38, Math.min(1.0, volumeScale));
       synth.speak(utt);
     } catch {
       // ignore speech synthesis errors in restricted environments
@@ -1073,8 +1244,8 @@ export class ModelTAudioEngine {
 
       const g = this.ctx.createGain();
       g.gain.setValueAtTime(0.001, now);
-      g.gain.linearRampToValueAtTime(idx === 0 ? 0.16 : 0.14, now + 0.04);
-      g.gain.setValueAtTime(idx === 0 ? 0.12 : 0.1, now + 0.7);
+      g.gain.linearRampToValueAtTime(idx === 0 ? 0.28 : 0.24, now + 0.04);
+      g.gain.setValueAtTime(idx === 0 ? 0.21 : 0.18, now + 0.7);
       g.gain.exponentialRampToValueAtTime(0.001, now + 1.32);
 
       osc.connect(filt);
@@ -1082,6 +1253,147 @@ export class ModelTAudioEngine {
       this.connectWithOptionalPan(g, pan);
       osc.start(now);
       osc.stop(now + 1.35);
+    });
+  }
+
+  private playCrankRatchetClick(now: number): void {
+    if (!this.ctx || !this.masterGain || this.muted || !this.noiseBuffer) return;
+    [0, 0.068].forEach((offset, idx) => {
+      if (!this.ctx || !this.masterGain || !this.noiseBuffer) return;
+      const src = this.ctx.createBufferSource();
+      src.buffer = this.noiseBuffer;
+      const filt = this.ctx.createBiquadFilter();
+      filt.type = 'bandpass';
+      filt.frequency.value = idx === 0 ? 1950 : 2350;
+      filt.Q.value = 5.5;
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(0.001, now + offset);
+      g.gain.linearRampToValueAtTime(0.11, now + offset + 0.005);
+      g.gain.exponentialRampToValueAtTime(0.001, now + offset + 0.042);
+      src.connect(filt);
+      filt.connect(g);
+      g.connect(this.masterGain);
+      src.start(now + offset);
+      src.stop(now + offset + 0.05);
+    });
+  }
+
+  public playGearBandClunk(gear: string): void {
+    this.init();
+    if (!this.ctx || !this.masterGain || this.muted) return;
+    const now = this.ctx.currentTime;
+    const baseFreq = gear === 'HIGH' ? 142 : gear === 'REV' ? 98 : gear === 'LOW' ? 122 : 165;
+
+    const osc = this.ctx.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(baseFreq * 1.45, now);
+    osc.frequency.exponentialRampToValueAtTime(baseFreq * 0.58, now + 0.085);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.001, now);
+    g.gain.linearRampToValueAtTime(0.17, now + 0.008);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.11);
+    osc.connect(g);
+    g.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.12);
+
+    if (this.noiseBuffer) {
+      const nSrc = this.ctx.createBufferSource();
+      nSrc.buffer = this.noiseBuffer;
+      const bp = this.ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.value = 1100;
+      bp.Q.value = 3.2;
+      const ng = this.ctx.createGain();
+      ng.gain.setValueAtTime(0.001, now);
+      ng.gain.linearRampToValueAtTime(0.09, now + 0.004);
+      ng.gain.exponentialRampToValueAtTime(0.001, now + 0.06);
+      nSrc.connect(bp);
+      bp.connect(ng);
+      ng.connect(this.masterGain);
+      nSrc.start(now);
+      nSrc.stop(now + 0.07);
+    }
+  }
+
+  public playPoliceWhistle(pan = 0): void {
+    this.init();
+    if (!this.ctx || !this.masterGain || this.muted) return;
+    const now = this.ctx.currentTime;
+
+    const osc = this.ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(2950, now);
+
+    const peaLfo = this.ctx.createOscillator();
+    peaLfo.type = 'sine';
+    peaLfo.frequency.value = 26;
+    const peaGain = this.ctx.createGain();
+    peaGain.gain.value = 240;
+    peaLfo.connect(peaGain);
+    peaGain.connect(osc.frequency);
+
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.001, now);
+    g.gain.linearRampToValueAtTime(0.18, now + 0.04);
+    g.gain.setValueAtTime(0.16, now + 0.28);
+    g.gain.linearRampToValueAtTime(0.02, now + 0.34);
+    g.gain.linearRampToValueAtTime(0.17, now + 0.40);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.72);
+
+    osc.connect(g);
+    this.connectWithOptionalPan(g, pan);
+    osc.start(now);
+    peaLfo.start(now);
+    osc.stop(now + 0.75);
+    peaLfo.stop(now + 0.75);
+  }
+
+  public playWaterStandpipeCool(): void {
+    this.init();
+    if (!this.ctx || !this.masterGain || this.muted || !this.noiseBuffer) return;
+    const now = this.ctx.currentTime;
+
+    const splashSrc = this.ctx.createBufferSource();
+    splashSrc.buffer = this.noiseBuffer;
+    const filt = this.ctx.createBiquadFilter();
+    filt.type = 'bandpass';
+    filt.frequency.setValueAtTime(1600, now);
+    filt.frequency.exponentialRampToValueAtTime(520, now + 0.85);
+    filt.Q.value = 1.6;
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.001, now);
+    g.gain.linearRampToValueAtTime(0.16, now + 0.08);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.95);
+    splashSrc.connect(filt);
+    filt.connect(g);
+    g.connect(this.masterGain);
+    splashSrc.start(now);
+    splashSrc.stop(now + 1.0);
+  }
+
+  private playSteamerFoghorn(now: number, intensity: number, pan = 0): void {
+    if (!this.ctx || !this.masterGain || this.muted) return;
+    const peak = Math.min(0.16, 0.04 + intensity * 0.11);
+    [118, 177].forEach((freq, idx) => {
+      if (!this.ctx) return;
+      const osc = this.ctx.createOscillator();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(freq, now);
+      osc.frequency.linearRampToValueAtTime(freq * 0.97, now + 1.45);
+      const lp = this.ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = 390;
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(0.001, now);
+      g.gain.linearRampToValueAtTime(idx === 0 ? peak : peak * 0.55, now + 0.18);
+      g.gain.setValueAtTime(idx === 0 ? peak * 0.9 : peak * 0.5, now + 1.05);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 1.55);
+      osc.connect(lp);
+      lp.connect(g);
+      this.connectWithOptionalPan(g, pan);
+      osc.start(now);
+      osc.stop(now + 1.6);
     });
   }
 
@@ -1108,10 +1420,11 @@ export class ModelTAudioEngine {
       }
     }
 
-    // Mechanical hand-crank compression chug while cranking
+    // Mechanical hand-crank compression chug + ratchet click while cranking
     if (state.ignitionOn && !state.engineRunning && state.crankingProgress > 0 && now >= this.nextCrankChugAt) {
       this.nextCrankChugAt = now + 0.24;
       this.playHandCrankChug(now);
+      this.playCrankRatchetClick(now);
     }
 
     // Radiator boiling steam hiss (silent when engine is off unless actively boiling over)
@@ -1206,20 +1519,24 @@ export class ModelTAudioEngine {
     this.roadFilter?.frequency.setTargetAtTime(surfaceFreq + speedFactor * 220, now, 0.06);
     const targetRoadGain =
       state.speedMps < 0.45 ? 0 : Math.pow(speedFactor, 1.35) * surfaceGain * (1 - env.snowCover * 0.35);
-    this.roadGain?.gain.setTargetAtTime(targetRoadGain, now, 0.05);
+    if (targetRoadGain === 0 && this.roadGain) {
+      this.roadGain.gain.setTargetAtTime(0, now, 0.03);
+    } else {
+      this.roadGain?.gain.setTargetAtTime(targetRoadGain, now, 0.05);
+    }
 
-    // Rain patter & coastal wind (zero wind noise floor on calm sunny days)
+    // Rain patter & coastal wind (zero wind/rain noise floor when calm or sunny)
     const targetRainVol = env.weather === 'rainy' ? 0.11 : 0;
-    this.rainGain?.gain.setTargetAtTime(targetRainVol, now, 0.25);
+    this.rainGain?.gain.setTargetAtTime(targetRainVol, now, 0.2);
 
     const targetWindVol =
       env.weather === 'windy'
         ? Math.min(0.13, 0.035 + env.windMps * 0.0045)
         : env.weather === 'snowy' || env.weather === 'rainy'
-          ? 0.025
-          : 0.002;
+          ? 0.022
+          : 0;
     this.windFilter?.frequency.setTargetAtTime(280 + env.windMps * 14, now, 0.2);
-    this.windGain?.gain.setTargetAtTime(targetWindVol, now, 0.25);
+    this.windGain?.gain.setTargetAtTime(targetWindVol, now, 0.22);
 
     // Dynamic Solar Time-of-Day Curves (Dawn -> Bustling Market Day -> Dusk -> Quiet Night)
     const daySpan = Math.max(6, env.sunsetHour - env.sunriseHour);
@@ -1229,21 +1546,22 @@ export class ModelTAudioEngine {
     const marketPeakFactor = Math.max(0, Math.min(1, sunSin * 1.15));
     const nightFactor = Math.max(0, Math.min(1, (-sunSin + 0.18) / 0.52));
 
-    const crowdProx = spatial?.crowdProximity ?? 0.25;
+    const crowdProx = spatial?.crowdProximity ?? 0;
     const densityScale = Math.min(1.5, 0.65 + (spatial?.crowdDensity ?? 4) * 0.1);
     const crowdTimeScale = 0.12 + 0.88 * dayFactor;
-    const targetCrowdVol = (0.008 + crowdProx * 0.14 * densityScale) * crowdTimeScale;
-    this.crowdGain?.gain.setTargetAtTime(targetCrowdVol, now, 0.18);
+    const targetCrowdVol = crowdProx <= 0.04 ? 0 : crowdProx * 0.15 * densityScale * crowdTimeScale;
+    this.crowdGain?.gain.setTargetAtTime(targetCrowdVol, now, 0.14);
     this.crowdFormantLow?.frequency.setTargetAtTime(390 + crowdProx * 120, now, 0.2);
     this.crowdPanner?.pan.setTargetAtTime(spatial?.crowdPan ?? 0, now, 0.12);
 
-    // Daytime Market Chatter & Merchant Hubbub vs Nocturnal Low-Frequency City Hum
+    // Daytime Market Chatter & Merchant Hubbub strictly gated by crowd proximity (eliminates idle static)
     const targetMarketVol =
-      dayFactor < 0.02
+      dayFactor < 0.02 || crowdProx < 0.06
         ? 0
-        : (0.018 + crowdProx * 0.04) * dayFactor * (0.45 + 0.55 * marketPeakFactor);
-    this.marketBustleGain?.gain.setTargetAtTime(targetMarketVol, now, 0.25);
-    this.cityAmbGain?.gain.setTargetAtTime(0.002 + 0.012 * dayFactor, now, 0.3);
+        : crowdProx * 0.055 * dayFactor * (0.45 + 0.55 * marketPeakFactor);
+    this.marketBustleGain?.gain.setTargetAtTime(targetMarketVol, now, 0.2);
+    const targetCityAmbVol = crowdProx < 0.1 ? 0 : (crowdProx - 0.1) * 0.012 * dayFactor;
+    this.cityAmbGain?.gain.setTargetAtTime(targetCityAmbVol, now, 0.22);
 
     const targetNightHumVol = nightFactor < 0.02 ? 0 : nightFactor * 0.042;
     this.nightHumGain?.gain.setTargetAtTime(targetNightHumVol, now, 0.35);
@@ -1251,6 +1569,10 @@ export class ModelTAudioEngine {
     const harbourProx = spatial?.harbourProximity ?? 0;
     this.surfGain?.gain.setTargetAtTime(harbourProx < 0.06 ? 0 : harbourProx * 0.08, now, 0.25);
     this.surfPanner?.pan.setTargetAtTime(spatial?.harbourPan ?? 0, now, 0.2);
+    if (harbourProx > 0.35 && now >= this.nextFoghornAt) {
+      this.nextFoghornAt = now + 28 + Math.random() * 14;
+      this.playSteamerFoghorn(now, harbourProx, spatial?.harbourPan ?? 0);
+    }
 
     // Harbour shunting locomotive chuff only audible near Sumpter Wharf siding
     const trainProx = spatial?.trainProximity ?? 0;
@@ -1334,12 +1656,29 @@ export class ModelTAudioEngine {
       this.playSheepBleat(now, sheepPanic, spatial?.sheepPan ?? 0);
     }
 
-    // Highland Bagpipes proximity & panicked weird-noise chase modulation
+    // Highland Bagpipes proximity & panicked weird-noise chase modulation (hard zero when knocked down)
     const piperProx = spatial?.piperProximity ?? 0;
     const piperPanic = spatial?.piperPanicLevel ?? 0;
     const piperDown = spatial?.piperDown ?? false;
-    const targetPipeGain = piperDown ? 0 : Math.pow(piperProx, 1.35) * (0.16 + piperPanic * 0.06);
-    this.bagpipeGain?.gain.setTargetAtTime(targetPipeGain, now, piperDown ? 0.04 : 0.12);
+    if (piperDown) {
+      if (!this.wasPiperDown && this.bagpipeGain) {
+        const bg = this.bagpipeGain.gain;
+        bg.cancelScheduledValues(now);
+        bg.setValueAtTime(Math.min(1, Math.max(0, bg.value)), now);
+        bg.linearRampToValueAtTime(0, now + 0.035);
+        bg.setValueAtTime(0, now + 0.04);
+      } else if (this.bagpipeGain) {
+        this.bagpipeGain.gain.setValueAtTime(0, now);
+      }
+      this.wasPiperDown = true;
+    } else {
+      if (this.wasPiperDown && this.bagpipeGain) {
+        this.bagpipeGain.gain.cancelScheduledValues(now);
+        this.wasPiperDown = false;
+      }
+      const targetPipeGain = piperProx <= 0.01 ? 0 : Math.pow(piperProx, 0.85) * (0.62 + piperPanic * 0.2);
+      this.bagpipeGain?.gain.setTargetAtTime(targetPipeGain, now, 0.08);
+    }
     this.bagpipePanner?.pan.setTargetAtTime(spatial?.piperPan ?? 0, now, 0.09);
 
     if (!piperDown && piperProx > 0.02) {
@@ -1414,8 +1753,31 @@ export class ModelTAudioEngine {
     osc2.stop(now + 0.36);
   }
 
+  public getRecordingAudioStream(): MediaStream | null {
+    this.init();
+    if (!this.ctx || !this.masterGain) return null;
+    if (typeof this.ctx.createMediaStreamDestination !== 'function') return null;
+    if (!this.recordDest) {
+      try {
+        this.recordDest = this.ctx.createMediaStreamDestination();
+        this.masterGain.connect(this.recordDest);
+      } catch {
+        return null;
+      }
+    }
+    return this.recordDest.stream;
+  }
+
   public dispose(): void {
     try {
+      if (this.recordDest && this.masterGain) {
+        try {
+          this.masterGain.disconnect(this.recordDest);
+        } catch {
+          // ignore disconnect errors
+        }
+      }
+      this.recordDest = null;
       this.engineOsc?.stop();
       this.engineSubOsc?.stop();
       this.gearWhineOsc?.stop();

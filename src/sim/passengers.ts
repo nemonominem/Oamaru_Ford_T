@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { createCharacterPool } from './characterModels';
+import { ModelTInstrumentKey } from './modelTGeometry';
 import { getTerrainHeightAndSurface } from './terrain';
 import { ControlMode, VehicleState } from './types';
 
@@ -41,6 +43,86 @@ export interface WaitingMapPoint {
   isInstructor: boolean;
 }
 
+export interface ArthurLessonStep {
+  key: ModelTInstrumentKey;
+  title: string;
+  instruction: string;
+  controlHint: string;
+  camOffset: [number, number, number];
+  lookOffset: [number, number, number];
+  fov: number;
+  interiorShot: boolean;
+}
+
+export const ARTHUR_LESSON_STEPS: ArthurLessonStep[] = [
+  {
+    key: 'ignition',
+    title: '1. Ignition Coil Box & Switch',
+    instruction:
+      "Flip the brass ignition switch ON first so the four wooden trembler coils hum with magneto current.",
+    controlHint: 'Press I or click Start Engine',
+    camOffset: [-0.14, 1.24, -0.34],
+    lookOffset: [0.14, 0.85, 0.08],
+    fov: 44,
+    interiorShot: true,
+  },
+  {
+    key: 'sparkThrottle',
+    title: '2. Spark Advance & Hand Throttle',
+    instruction:
+      "Left brass lever sets Spark timing; right lever sets Hand Throttle. Always retard Spark left before cranking!",
+    controlHint: 'Q / E for Spark · Throttle slider or W',
+    camOffset: [-0.03, 1.28, -0.45],
+    lookOffset: [-0.23, 1.04, -0.14],
+    fov: 42,
+    interiorShot: true,
+  },
+  {
+    key: 'crank',
+    title: '3. Front Hand-Crank',
+    instruction:
+      "Step in front of the brass radiator and give the crank a brisk upward pull. Keep Spark retarded or she'll kick back!",
+    controlHint: 'Press C or click Hand-Crank',
+    camOffset: [0.78, 0.80, 2.52],
+    lookOffset: [0, 0.43, 1.40],
+    fov: 44,
+    interiorShot: false,
+  },
+  {
+    key: 'pedals',
+    title: '4. Three Planetary Floor Pedals',
+    instruction:
+      "No stick shift here! Left pedal (Shift) holds Low gear, middle (X) reverses, and right (S) brakes the transmission.",
+    controlHint: '3-Pedal: Shift (Low) · X (Rev) · S (Brake)',
+    camOffset: [-0.12, 1.18, -0.44],
+    lookOffset: [-0.23, 0.56, 0.08],
+    fov: 45,
+    interiorShot: true,
+  },
+  {
+    key: 'handbrake',
+    title: '5. Handbrake & High-Clutch Lever',
+    instruction:
+      "Pull back to Park, upright for Neutral when starting, or forward to lock High gear once rolling.",
+    controlHint: 'Space toggles High / Neutral / Park in 3-Pedal',
+    camOffset: [-1.08, 1.18, -0.42],
+    lookOffset: [-0.43, 0.78, -0.05],
+    fov: 44,
+    interiorShot: false,
+  },
+  {
+    key: 'gauges',
+    title: '6. Speedometer & Magneto Ammeter',
+    instruction:
+      "Check the Stewart-Warner dial up to 45 mph and watch the ammeter needle charge as engine revs rise.",
+    controlHint: 'Keep cool on Cape Wanbrow in Low gear',
+    camOffset: [-0.14, 1.07, -0.28],
+    lookOffset: [-0.15, 0.87, 0.13],
+    fov: 42,
+    interiorShot: true,
+  },
+];
+
 export interface PassengerHudState {
   onboardId: PassengerId | null;
   onboardName: string | null;
@@ -54,6 +136,7 @@ export interface PassengerHudState {
   nearbyWaitingDist: number | null;
   waitingPoints: WaitingMapPoint[];
   coachTip: string | null;
+  coachFocusKey: ModelTInstrumentKey | null;
   noticeText: string | null;
 }
 
@@ -204,52 +287,103 @@ export function getPassengerById(id: PassengerId): PassengerSpec {
   return PASSENGERS.find((p) => p.id === id) ?? PASSENGERS[0];
 }
 
+export function getMechanicLiveTipWithFocus(
+  state: VehicleState,
+  controlMode: ControlMode,
+  lastImpactAtAgeSec: number
+): { text: string; focusKey: ModelTInstrumentKey | null } {
+  if (!state.ignitionOn) {
+    return {
+      text: "Step 1: Flip Ignition ON (press I), retard the Spark lever left (Q), then pull the Hand-Crank (C)!",
+      focusKey: 'ignition',
+    };
+  }
+  if (state.crankKickbackWarning) {
+    return {
+      text: "Ouch—kickback! Always retard Spark (Q) below 65% before cranking, or she'll snap your wrist!",
+      focusKey: 'sparkThrottle',
+    };
+  }
+  if (!state.engineRunning) {
+    return {
+      text:
+        state.crankingProgress > 0
+          ? 'Turn that crank briskly—wait for the 4 cylinders to catch!'
+          : "Ignition's buzzing! Pull the Hand-Crank (C) to fire up the 2.9L flathead!",
+      focusKey: 'crank',
+    };
+  }
+  if (state.isOverheating || state.engineTempC > 96) {
+    return {
+      text: "Radiator's steaming! No water pump in a '14 Lizzie—ease the throttle or press Shift for Low gear to cool her down!",
+      focusKey: 'gauges',
+    };
+  }
+  if (state.knocking) {
+    return {
+      text: "Hear that metallic ping? That's spark knock—slide Spark Advance back slightly (Q) under heavy load!",
+      focusKey: 'sparkThrottle',
+    };
+  }
+  if (state.gear === 'HIGH' && state.slopePercent > 4.5 && state.speedMph < 13) {
+    return {
+      text: "She's lugging uphill in High! Hold Shift (Low pedal) for the 2.75:1 planetary reduction—don't stall!",
+      focusKey: 'pedals',
+    };
+  }
+  if (lastImpactAtAgeSec < 3.0) {
+    return {
+      text: 'Easy on the hickory spokes! Watch out for potholes and timber crates on Harbour Street!',
+      focusKey: null,
+    };
+  }
+  if (state.speedMph > 24) {
+    return {
+      text: 'Steady! Two-wheel rear transmission brakes only—give yourself plenty of distance before corners!',
+      focusKey: null,
+    };
+  }
+  if (state.speedMph < 1.2) {
+    return controlMode === 'authentic'
+      ? {
+          text: '3-Pedal Lesson: Advance Spark (E), open Throttle slightly, release Handbrake (Space) to High or hold Shift for Low!',
+          focusKey: 'pedals',
+        }
+      : {
+          text: 'WASD Lesson: Hold W to glide off in Low then auto-shift to High; use S to brake or double-back into Reverse!',
+          focusKey: 'pedals',
+        };
+  }
+  if (state.currentSurface === 'cobbles') {
+    return {
+      text: 'Bluestone cobbles ahead—grip the wooden steering rim lightly and let the transverse leaf springs soak the rattle!',
+      focusKey: null,
+    };
+  }
+  if (state.currentSurface === 'mud' || state.currentSurface === 'grass') {
+    return {
+      text: 'Off the limestone road! Keep steady throttle and gentle steering—sharp turns will spin the rear axle!',
+      focusKey: null,
+    };
+  }
+  if (state.sparkAdvance < 0.35 && state.rpm > 1050) {
+    return {
+      text: "Once she's cruising nicely, advance the Spark lever (E) rightwards for crisper power and cooler exhaust!",
+      focusKey: 'sparkThrottle',
+    };
+  }
+  return {
+    text: 'Purring like a sewing machine! Keep revs smooth, advance Spark (E) at cruise, and watch your radiator temp!',
+    focusKey: null,
+  };
+}
+
 export function getMechanicLiveLesson(
   state: VehicleState,
   controlMode: ControlMode,
   lastImpactAtAgeSec: number
 ): string {
-  if (!state.ignitionOn) {
-    return "Step 1: Flip Ignition ON (press I), retard the Spark lever left (Q), then pull the Hand-Crank (C)!";
-  }
-  if (state.crankKickbackWarning) {
-    return "Ouch—kickback! Always retard Spark (Q) below 65% before cranking, or she'll snap your wrist!";
-  }
-  if (!state.engineRunning) {
-    return state.crankingProgress > 0
-      ? "Turn that crank briskly—wait for the 4 cylinders to catch!"
-      : "Ignition's buzzing! Pull the Hand-Crank (C) to fire up the 2.9L flathead!";
-  }
-  if (state.isOverheating || state.engineTempC > 96) {
-    return "Radiator's steaming! No water pump in a '14 Lizzie—ease the throttle or press Shift for Low gear to cool her down!";
-  }
-  if (state.knocking) {
-    return "Hear that metallic ping? That's spark knock—slide Spark Advance back slightly (Q) under heavy load!";
-  }
-  if (state.gear === 'HIGH' && state.slopePercent > 4.5 && state.speedMph < 13) {
-    return "She's lugging uphill in High! Hold Shift (Low pedal) for the 2.75:1 planetary reduction—don't stall!";
-  }
-  if (lastImpactAtAgeSec < 3.0) {
-    return "Easy on the hickory spokes! Watch out for potholes and timber crates on Harbour Street!";
-  }
-  if (state.speedMph > 24) {
-    return "Steady! Two-wheel rear transmission brakes only—give yourself plenty of distance before corners!";
-  }
-  if (state.speedMph < 1.2) {
-    return controlMode === 'authentic'
-      ? "3-Pedal Lesson: Advance Spark (E), open Throttle slightly, release Handbrake (Space) to High or hold Shift for Low!"
-      : "WASD Lesson: Hold W to glide off in Low then auto-shift to High; use S to brake or double-back into Reverse!";
-  }
-  if (state.currentSurface === 'cobbles') {
-    return "Bluestone cobbles ahead—grip the wooden steering rim lightly and let the transverse leaf springs soak the rattle!";
-  }
-  if (state.currentSurface === 'mud' || state.currentSurface === 'grass') {
-    return "Off the limestone road! Keep steady throttle and gentle steering—sharp turns will spin the rear axle!";
-  }
-  if (state.sparkAdvance < 0.35 && state.rpm > 1050) {
-    return "Once she's cruising nicely, advance the Spark lever (E) rightwards for crisper power and cooler exhaust!";
-  }
-  return "Purring like a sewing machine! Keep revs smooth, advance Spark (E) at cruise, and watch your radiator temp!";
+  return getMechanicLiveTipWithFocus(state, controlMode, lastImpactAtAgeSec).text;
 }
 
 export type PassengerRideEvent =
@@ -453,290 +587,46 @@ export function buildPassengerSystem(seatParent: THREE.Group): PassengerSystemHa
   };
 
   const group = new THREE.Group();
-
-  // Shared materials with varied roughness/metalness
-  const skinMat = track(new THREE.MeshStandardMaterial({ color: 0xdcb89a, roughness: 0.72 }));
-  const hairMat = track(new THREE.MeshStandardMaterial({ color: 0x3b261a, roughness: 0.88 }));
-  const whiteBeardMat = track(new THREE.MeshStandardMaterial({ color: 0xe9e6df, roughness: 0.9 }));
-  const overallMat = track(new THREE.MeshStandardMaterial({ color: 0x3c4d63, roughness: 0.86 }));
-  const greaseClothMat = track(new THREE.MeshStandardMaterial({ color: 0x8f332c, roughness: 0.9 }));
-  const brassMat = track(new THREE.MeshStandardMaterial({ color: 0xd9a84e, roughness: 0.24, metalness: 0.88 }));
-  const sheepWoolMat = track(new THREE.MeshStandardMaterial({ color: 0xeee6d7, roughness: 0.96 }));
-  const sheepFaceMat = track(new THREE.MeshStandardMaterial({ color: 0x2a2523, roughness: 0.82 }));
-  const redRibbonMat = track(new THREE.MeshStandardMaterial({ color: 0xb92c28, roughness: 0.55 }));
-  const burgundyMat = track(new THREE.MeshStandardMaterial({ color: 0x67242c, roughness: 0.82 }));
-  const creamMat = track(new THREE.MeshStandardMaterial({ color: 0xefe6d4, roughness: 0.84 }));
-  const strawHatMat = track(new THREE.MeshStandardMaterial({ color: 0xd9c287, roughness: 0.78 }));
-  const blazerMat = track(new THREE.MeshStandardMaterial({ color: 0x1f364d, roughness: 0.84 }));
-  const shortsMat = track(new THREE.MeshStandardMaterial({ color: 0x4b463d, roughness: 0.88 }));
-  const capGoldMat = track(new THREE.MeshStandardMaterial({ color: 0xc99c42, roughness: 0.45, metalness: 0.45 }));
-  const navyCoatMat = track(new THREE.MeshStandardMaterial({ color: 0x1c2838, roughness: 0.8 }));
-  const leatherMat = track(new THREE.MeshStandardMaterial({ color: 0x211813, roughness: 0.65 }));
-
-  const headGeo = track(new THREE.SphereGeometry(0.115, 12, 10));
-  const handGeo = track(new THREE.SphereGeometry(0.036, 8, 6));
-  const bootGeo = track(new THREE.BoxGeometry(0.085, 0.065, 0.16));
+  const charPool = track(createCharacterPool());
+  const hankyGeo = track(new THREE.PlaneGeometry(0.24, 0.22));
 
   const createPassengerMesh = (id: PassengerId, seated: boolean): BuiltCharacterRig => {
-    const g = new THREE.Group();
-    const legPivots: THREE.Object3D[] = [];
-    const armPivots: THREE.Object3D[] = [];
-    let headPivot: THREE.Object3D = new THREE.Group();
-    let propPivot: THREE.Object3D | undefined;
-
     if (id === 'sheep') {
-      // Composite Merino Sheep (multi-tuft fleece, dark face, ears, A&P red ribbon, 4 hooves)
-      const rootOffsetY = seated ? 0.14 : 0.56;
-      const bodyGrp = new THREE.Group();
-      bodyGrp.position.set(0, rootOffsetY, 0);
-
-      const torso = new THREE.Mesh(track(new THREE.SphereGeometry(0.26, 12, 10)), sheepWoolMat);
-      torso.scale.set(0.92, 0.92, 1.38);
-      torso.castShadow = true;
-      const chestFluff = new THREE.Mesh(track(new THREE.SphereGeometry(0.22, 10, 8)), sheepWoolMat);
-      chestFluff.position.set(0, 0.05, 0.22);
-      const rumpFluff = new THREE.Mesh(track(new THREE.SphereGeometry(0.21, 10, 8)), sheepWoolMat);
-      rumpFluff.position.set(0, 0.04, -0.22);
-      const collarRibbon = new THREE.Mesh(track(new THREE.TorusGeometry(0.15, 0.025, 6, 12)), redRibbonMat);
-      collarRibbon.position.set(0, 0.14, 0.26);
-      collarRibbon.rotation.x = 0.5;
-      bodyGrp.add(torso, chestFluff, rumpFluff, collarRibbon);
-
-      // Head + ears + fleece crest
-      const sHead = new THREE.Group();
-      sHead.position.set(0, 0.22, 0.34);
-      const skull = new THREE.Mesh(track(new THREE.SphereGeometry(0.115, 10, 8)), sheepFaceMat);
-      skull.scale.set(0.85, 0.92, 1.25);
-      const woolCap = new THREE.Mesh(track(new THREE.SphereGeometry(0.09, 8, 6)), sheepWoolMat);
-      woolCap.position.set(0, 0.08, -0.02);
-      [-0.1, 0.1].forEach((ex) => {
-        const ear = new THREE.Mesh(track(new THREE.BoxGeometry(0.1, 0.035, 0.045)), sheepFaceMat);
-        ear.position.set(ex, 0.03, -0.02);
-        ear.rotation.z = ex < 0 ? 0.45 : -0.45;
-        sHead.add(ear);
+      const sheepRig = charPool.buildSheep({
+        seated,
+        hasRibbon: true,
+        withHorns: false,
       });
-      sHead.add(skull, woolCap);
-      bodyGrp.add(sHead);
-      headPivot = sHead;
-
-      // 4 hooves (front right hoof waves when waiting; tucked forward when seated)
-      const legGeo = track(new THREE.CylinderGeometry(0.038, 0.03, 0.36, 8));
-      [
-        [0.12, 0.18],
-        [-0.12, 0.18],
-        [0.12, -0.2],
-        [-0.12, -0.2],
-      ].forEach(([lx, lz], idx) => {
-        const lp = new THREE.Group();
-        lp.position.set(lx, -0.16, lz);
-        const leg = new THREE.Mesh(legGeo, sheepFaceMat);
-        leg.position.set(0, -0.17, 0);
-        if (seated) {
-          lp.rotation.x = idx < 2 ? -1.15 : -0.7;
-        }
-        lp.add(leg);
-        bodyGrp.add(lp);
-        legPivots.push(lp);
-        if (idx === 0) armPivots.push(lp);
-      });
-
-      if (seated) {
-        // Upright plump sheep sitting comfortably in front bench seat
-        bodyGrp.rotation.x = -0.35;
-        bodyGrp.position.set(0, 0.25, -0.02);
-      }
-
-      g.add(bodyGrp);
-      return { group: g, headPivot, armPivots, legPivots };
+      return {
+        group: sheepRig.group,
+        headPivot: sheepRig.headPivot,
+        armPivots: [sheepRig.legPivots[0]],
+        legPivots: sheepRig.legPivots,
+      };
     }
 
-    // Human characters (Mechanic, Tea-Party Lady, Schoolboy, Sea Captain)
-    const scale = id === 'schoolboy' ? 0.78 : 0.96;
-    g.scale.setScalar(scale);
-
-    const torsoY = seated ? 0.32 : 1.18;
-    const headY = seated ? 0.68 : 1.54;
-    const shoulderY = seated ? 0.51 : 1.41;
-
-    const headG = new THREE.Group();
-    headG.position.set(0, headY, 0);
-    const skull = new THREE.Mesh(headGeo, skinMat);
-    skull.position.set(0, 0.05, 0);
-    skull.castShadow = true;
-    const nose = new THREE.Mesh(track(new THREE.BoxGeometry(0.03, 0.036, 0.042)), skinMat);
-    nose.position.set(0, 0.04, 0.11);
-    headG.add(skull, nose);
-
-    let coatMat: THREE.Material = overallMat;
-    let legMat: THREE.Material = overallMat;
-
-    if (id === 'mechanic') {
-      coatMat = overallMat;
-      legMat = overallMat;
-      // Flat cap + brass goggles + mustache
-      const cap = new THREE.Mesh(track(new THREE.CylinderGeometry(0.125, 0.12, 0.06, 10)), overallMat);
-      cap.position.set(0, 0.12, 0.01);
-      const peak = new THREE.Mesh(track(new THREE.BoxGeometry(0.14, 0.018, 0.09)), leatherMat);
-      peak.position.set(0, 0.10, 0.12);
-      const stache = new THREE.Mesh(track(new THREE.BoxGeometry(0.08, 0.022, 0.024)), hairMat);
-      stache.position.set(0, 0.015, 0.11);
-      headG.add(cap, peak, stache);
-      // Red rag tucked at waist
-      const rag = new THREE.Mesh(track(new THREE.BoxGeometry(0.09, 0.18, 0.04)), greaseClothMat);
-      rag.position.set(0.16, torsoY - 0.18, 0.11);
-      rag.rotation.z = -0.25;
-      g.add(rag);
-    } else if (id === 'lady') {
-      coatMat = creamMat;
-      legMat = burgundyMat;
-      const bun = new THREE.Mesh(track(new THREE.SphereGeometry(0.06, 8, 6)), hairMat);
-      bun.position.set(0, 0.04, -0.11);
-      const brim = new THREE.Mesh(track(new THREE.CylinderGeometry(0.25, 0.26, 0.022, 14)), strawHatMat);
-      brim.position.set(0, 0.13, 0);
-      brim.rotation.x = -0.06;
-      const crown = new THREE.Mesh(track(new THREE.CylinderGeometry(0.11, 0.125, 0.08, 12)), creamMat);
-      crown.position.set(0, 0.17, 0);
-      const ribbon = new THREE.Mesh(track(new THREE.CylinderGeometry(0.128, 0.128, 0.026, 12)), burgundyMat);
-      ribbon.position.set(0, 0.148, 0);
-      const flower = new THREE.Mesh(track(new THREE.SphereGeometry(0.042, 7, 6)), redRibbonMat);
-      flower.position.set(0.15, 0.15, 0.08);
-      headG.add(bun, brim, crown, ribbon, flower);
-      if (!seated) {
-        const skirt = new THREE.Mesh(track(new THREE.CylinderGeometry(0.16, 0.33, 0.88, 12)), burgundyMat);
-        skirt.position.set(0, 0.46, 0);
-        skirt.castShadow = true;
-        g.add(skirt);
-      }
-    } else if (id === 'schoolboy') {
-      coatMat = blazerMat;
-      legMat = shortsMat;
-      const cap = new THREE.Mesh(track(new THREE.SphereGeometry(0.122, 10, 8, 0, Math.PI * 2, 0, Math.PI * 0.55)), blazerMat);
-      cap.position.set(0, 0.09, 0);
-      cap.rotation.z = -0.16; // crooked school cap
-      const stripe = new THREE.Mesh(track(new THREE.TorusGeometry(0.118, 0.012, 6, 14)), capGoldMat);
-      stripe.rotation.x = Math.PI / 2;
-      stripe.position.set(0, 0.10, 0);
-      const peak = new THREE.Mesh(track(new THREE.BoxGeometry(0.13, 0.015, 0.085)), blazerMat);
-      peak.position.set(0.02, 0.09, 0.11);
-      headG.add(cap, stripe, peak);
-    } else {
-      // Retired Sea Captain
-      coatMat = navyCoatMat;
-      legMat = navyCoatMat;
-      const cap = new THREE.Mesh(track(new THREE.CylinderGeometry(0.135, 0.118, 0.075, 12)), navyCoatMat);
-      cap.position.set(0, 0.13, 0);
-      const goldBand = new THREE.Mesh(track(new THREE.CylinderGeometry(0.122, 0.122, 0.024, 12)), brassMat);
-      goldBand.position.set(0, 0.10, 0);
-      const visor = new THREE.Mesh(track(new THREE.BoxGeometry(0.14, 0.018, 0.09)), leatherMat);
-      visor.position.set(0, 0.09, 0.12);
-      const beard = new THREE.Mesh(track(new THREE.ConeGeometry(0.085, 0.19, 8)), whiteBeardMat);
-      beard.position.set(0, -0.07, 0.08);
-      beard.rotation.x = Math.PI - 0.12;
-      headG.add(cap, goldBand, visor, beard);
+    const humanRig = charPool.buildHuman(id, 0, { seated });
+    if (!seated) {
+      // Bright waving hail handkerchief attached to sculpted hand on right forearm
+      const hankyMat = track(
+        new THREE.MeshBasicMaterial({
+          color: id === 'mechanic' ? 0xf5d173 : 0xfaf7ef,
+          side: THREE.DoubleSide,
+        })
+      );
+      const hanky = new THREE.Mesh(hankyGeo, hankyMat);
+      hanky.position.set(0.02, -0.30, 0.04);
+      hanky.rotation.z = 0.25;
+      humanRig.rightElbow.add(hanky);
     }
 
-    const torso = new THREE.Mesh(track(new THREE.BoxGeometry(0.35, 0.48, 0.2)), coatMat);
-    torso.position.set(0, torsoY, 0);
-    torso.castShadow = true;
-    g.add(torso);
-
-    if (id === 'captain') {
-      // Double-breasted brass buttons
-      [-0.06, 0.06].forEach((bx) => {
-        [0.12, 0.0, -0.12].forEach((by) => {
-          const btn = new THREE.Mesh(track(new THREE.SphereGeometry(0.016, 6, 6)), brassMat);
-          btn.position.set(bx, torsoY + by, 0.106);
-          g.add(btn);
-        });
-      });
-    } else if (id === 'schoolboy') {
-      const tie = new THREE.Mesh(track(new THREE.BoxGeometry(0.045, 0.24, 0.02)), capGoldMat);
-      tie.position.set(0, torsoY + 0.04, 0.105);
-      g.add(tie);
-    }
-
-    // Legs (straight when waiting, bent forward on cushion when seated)
-    const thighGeo = track(new THREE.CylinderGeometry(0.068, 0.055, seated ? 0.38 : 0.84, 8));
-    [-0.095, 0.095].forEach((lx) => {
-      const lp = new THREE.Group();
-      lp.position.set(lx, seated ? 0.08 : 0.92, seated ? 0.06 : 0);
-      if (seated) {
-        const thigh = new THREE.Mesh(thighGeo, legMat);
-        thigh.rotation.x = Math.PI / 2 - 0.12;
-        thigh.position.set(0, -0.02, 0.17);
-        const shin = new THREE.Mesh(track(new THREE.CylinderGeometry(0.052, 0.044, 0.36, 8)), legMat);
-        shin.position.set(0, -0.19, 0.34);
-        const boot = new THREE.Mesh(bootGeo, leatherMat);
-        boot.position.set(0, -0.36, 0.38);
-        lp.add(thigh, shin, boot);
-      } else {
-        const legM = new THREE.Mesh(thighGeo, legMat);
-        legM.position.set(0, -0.44, 0);
-        legM.castShadow = true;
-        const boot = new THREE.Mesh(bootGeo, leatherMat);
-        boot.position.set(0, -0.88, 0.035);
-        lp.add(legM, boot);
-      }
-      if (id !== 'lady' || seated) {
-        g.add(lp);
-      }
-      legPivots.push(lp);
-    });
-
-    // Arms + Signature Props (Brass Spanner / Spyglass / Handbag)
-    [-0.22, 0.22].forEach((ax, ai) => {
-      const ap = new THREE.Group();
-      ap.position.set(ax, shoulderY, 0);
-      const sleeve = new THREE.Mesh(track(new THREE.CylinderGeometry(0.05, 0.04, 0.46, 8)), coatMat);
-      sleeve.position.set(0, -0.22, 0);
-      sleeve.castShadow = true;
-      const hand = new THREE.Mesh(handGeo, skinMat);
-      hand.position.set(0, -0.46, 0);
-      ap.add(sleeve, hand);
-
-      if (ai === 1 && id === 'mechanic') {
-        const spanner = new THREE.Mesh(track(new THREE.BoxGeometry(0.03, 0.24, 0.018)), brassMat);
-        spanner.position.set(0, -0.49, 0.09);
-        spanner.rotation.x = Math.PI / 2;
-        ap.add(spanner);
-        propPivot = spanner;
-      } else if (ai === 1 && id === 'captain') {
-        const spyglass = new THREE.Mesh(track(new THREE.CylinderGeometry(0.025, 0.018, 0.26, 8)), brassMat);
-        spyglass.rotation.x = Math.PI / 2;
-        spyglass.position.set(0, -0.47, 0.11);
-        ap.add(spyglass);
-        propPivot = spyglass;
-      } else if (ai === 0 && id === 'lady') {
-        const bag = new THREE.Mesh(track(new THREE.BoxGeometry(0.07, 0.15, 0.16)), leatherMat);
-        bag.position.set(0, -0.54, 0.03);
-        ap.add(bag);
-        propPivot = bag;
-      }
-
-      if (!seated && ai === 1) {
-        // Bright waving hail handkerchief so roadside hitchhikers stand out clearly from regular spectators
-        const hankyMat = track(
-          new THREE.MeshBasicMaterial({
-            color: id === 'mechanic' ? 0xf5d173 : 0xfaf7ef,
-            side: THREE.DoubleSide,
-          })
-        );
-        const hanky = new THREE.Mesh(track(new THREE.PlaneGeometry(0.24, 0.22)), hankyMat);
-        hanky.position.set(0.02, -0.55, 0.04);
-        hanky.rotation.z = 0.25;
-        ap.add(hanky);
-      }
-
-      if (seated) {
-        ap.rotation.x = -0.68;
-      }
-      g.add(ap);
-      armPivots.push(ap);
-    });
-
-    g.add(headG);
-    headPivot = headG;
-    return { group: g, headPivot, armPivots, legPivots, propPivot };
+    return {
+      group: humanRig.group,
+      headPivot: humanRig.headPivot,
+      armPivots: [humanRig.leftArm, humanRig.rightArm],
+      legPivots: [humanRig.leftLeg, humanRig.rightLeg],
+      propPivot: humanRig.propPivot,
+    };
   };
 
   const createPlacardSprite = (

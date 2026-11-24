@@ -5,12 +5,18 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ControlDock } from './components/ControlDock';
-import { OamaruViewport } from './components/OamaruViewport';
+import { MobileTouchControls, TouchDrivingState } from './components/MobileTouchControls';
+import {
+  OamaruViewport,
+  RecorderControlHandle,
+  RecordingStatusState,
+} from './components/OamaruViewport';
+import { StartShieldModal } from './components/StartShieldModal';
 import { ModelTAudioEngine } from './sim/audio';
 import { computeAmbientTempC, getSeasonClimateInfo, pickLikelyWeather } from './sim/climate';
 import { ActiveErrandState, OAMARU_ERRANDS, loadTrialRecords } from './sim/errands';
 import { createInitialVehicleState, toggleIgnition, triggerHandCrank } from './sim/physics';
-import { PassengerHudState, PassengerSpec } from './sim/passengers';
+import { PASSENGERS, PassengerHudState, PassengerSpec } from './sim/passengers';
 import { getTerrainSample } from './sim/terrain';
 import {
   CameraMode,
@@ -66,7 +72,8 @@ export default function App() {
 
   const envRef = useRef<EnvironmentState>(buildInitialEnv());
 
-  const cameraModeRef = useRef<CameraMode>('cockpit');
+  const cameraModeRef = useRef<CameraMode>('orbit');
+  const recordCameraModeRef = useRef<CameraMode>('orbit');
   const controlModeRef = useRef<ControlMode>('standard');
   const headlightsManualRef = useRef<boolean | null>(null);
   const wiperOnRef = useRef<boolean>(false);
@@ -74,13 +81,27 @@ export default function App() {
   const hornTriggerRef = useRef<number>(0);
   const passengerActionTriggerRef = useRef<number>(0);
   const resetTriggerRef = useRef<number>(0);
+  const recorderControlRef = useRef<RecorderControlHandle | null>(null);
 
+  const [startShieldOpen, setStartShieldOpen] = useState<boolean>(true);
+  const startShieldOpenRef = useRef<boolean>(true);
+  startShieldOpenRef.current = startShieldOpen;
+  const [hasStartedOnce, setHasStartedOnce] = useState<boolean>(false);
+  const [showInstructions, setShowInstructions] = useState<boolean>(false);
   const [telemetry, setTelemetry] = useState<VehicleState>(() => ({
     ...vehicleStateRef.current,
     wheels: [...vehicleStateRef.current.wheels] as VehicleState['wheels'],
   }));
   const [envState, setEnvState] = useState<EnvironmentState>(() => ({ ...envRef.current }));
-  const [cameraMode, setCameraMode] = useState<CameraMode>('cockpit');
+  const [cameraMode, setCameraMode] = useState<CameraMode>('orbit');
+  const [recordCameraMode, setRecordCameraMode] = useState<CameraMode>('orbit');
+  const [recordingStatus, setRecordingStatus] = useState<RecordingStatusState>({
+    isRecording: false,
+    elapsedSec: 0,
+    recordedMode: 'orbit',
+    error: null,
+    lastSavedFilename: null,
+  });
   const [controlMode, setControlMode] = useState<ControlMode>('standard');
   const [muted, setMuted] = useState<boolean>(false);
   const [headlightsOn, setHeadlightsOn] = useState<boolean>(false);
@@ -98,6 +119,7 @@ export default function App() {
     nearbyWaitingDist: null,
     waitingPoints: [],
     coachTip: null,
+    coachFocusKey: null,
     noticeText: null,
   });
 
@@ -111,29 +133,44 @@ export default function App() {
   const errandStateRef = useRef<ActiveErrandState>(errandState);
   errandStateRef.current = errandState;
 
+  const [touchControlsEnabled, setTouchControlsEnabled] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    const coarse = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches;
+    return coarse || window.innerWidth < 900 || navigator.maxTouchPoints > 0;
+  });
+
   const pressedKeysRef = useRef<Set<string>>(new Set());
+  const touchInputRef = useRef<TouchDrivingState>({
+    steerLeft: false,
+    steerRight: false,
+    drive: false,
+    brake: false,
+    reverse: false,
+  });
 
   const syncKeysToControls = useCallback(() => {
     const keys = pressedKeysRef.current;
+    const touch = touchInputRef.current;
     const ctrl = controlsRef.current;
 
-    const left = keys.has('KeyA') || keys.has('ArrowLeft');
-    const right = keys.has('KeyD') || keys.has('ArrowRight');
+    const left = keys.has('KeyA') || keys.has('ArrowLeft') || touch.steerLeft;
+    const right = keys.has('KeyD') || keys.has('ArrowRight') || touch.steerRight;
     ctrl.steer = (right ? 1 : 0) - (left ? 1 : 0);
 
-    const fwd = keys.has('KeyW') || keys.has('ArrowUp');
-    const back = keys.has('KeyS') || keys.has('ArrowDown');
+    const fwd = keys.has('KeyW') || keys.has('ArrowUp') || touch.drive;
+    const back = keys.has('KeyS') || keys.has('ArrowDown') || touch.brake;
+    const rev = keys.has('KeyX') || touch.reverse;
 
     if (controlModeRef.current === 'standard') {
       ctrl.throttleInput = fwd ? 1 : 0;
       ctrl.brakeInput = back ? 1 : 0;
-      ctrl.reverseInput = keys.has('KeyX');
+      ctrl.reverseInput = rev;
       ctrl.handbrakePos = keys.has('Space') ? 1.0 : 0.5;
     } else {
-      ctrl.lowPedal = keys.has('ShiftLeft') || keys.has('ShiftRight');
-      ctrl.reversePedal = keys.has('KeyX');
+      ctrl.lowPedal = keys.has('ShiftLeft') || keys.has('ShiftRight') || touch.drive;
+      ctrl.reversePedal = rev;
       ctrl.brakePedal = back;
-      if (fwd) {
+      if (keys.has('KeyW') || keys.has('ArrowUp')) {
         ctrl.handThrottle = Math.min(1, ctrl.handThrottle + 0.02);
       }
     }
@@ -335,6 +372,59 @@ export default function App() {
     setCameraMode(mode);
   }, []);
 
+  const handleRecordCameraChange = useCallback((mode: CameraMode) => {
+    recordCameraModeRef.current = mode;
+    setRecordCameraMode(mode);
+  }, []);
+
+  const handleToggleRecording = useCallback(() => {
+    audioRef.current.init();
+    if (recordingStatus.isRecording) {
+      recorderControlRef.current?.stop();
+    } else {
+      recorderControlRef.current?.start();
+    }
+  }, [recordingStatus.isRecording]);
+
+  const handleStartFromShield = useCallback(() => {
+    audioRef.current.init();
+    setHasStartedOnce(true);
+    setStartShieldOpen(false);
+  }, []);
+
+  const clearTouchInputs = useCallback(() => {
+    touchInputRef.current = {
+      steerLeft: false,
+      steerRight: false,
+      drive: false,
+      brake: false,
+      reverse: false,
+    };
+  }, []);
+
+  const handleTouchChange = useCallback(
+    (key: keyof TouchDrivingState, active: boolean) => {
+      audioRef.current.init();
+      touchInputRef.current[key] = active;
+      syncKeysToControls();
+    },
+    [syncKeysToControls]
+  );
+
+  const handleHandbrakeCycle = useCallback(() => {
+    audioRef.current.init();
+    const cur = controlsRef.current.handbrakePos;
+    controlsRef.current.handbrakePos = cur > 0.7 ? 0.5 : cur < 0.25 ? 1.0 : 0.0;
+  }, []);
+
+  const handleOpenGuide = useCallback(() => {
+    pressedKeysRef.current.clear();
+    clearTouchInputs();
+    syncKeysToControls();
+    setShowInstructions(true);
+    setStartShieldOpen(true);
+  }, [clearTouchInputs, syncKeysToControls]);
+
   const handleControlModeChange = useCallback((mode: ControlMode) => {
     controlModeRef.current = mode;
     setControlMode(mode);
@@ -359,6 +449,7 @@ export default function App() {
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      if (startShieldOpenRef.current) return;
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       audioRef.current.init();
 
@@ -410,6 +501,7 @@ export default function App() {
 
     const onBlur = () => {
       pressedKeysRef.current.clear();
+      clearTouchInputs();
       syncKeysToControls();
     };
 
@@ -424,6 +516,7 @@ export default function App() {
       audioRef.current.dispose();
     };
   }, [
+    clearTouchInputs,
     handleCameraChange,
     handlePassengerAction,
     handleResetVehicle,
@@ -440,6 +533,7 @@ export default function App() {
         controlsRef={controlsRef}
         envRef={envRef}
         cameraModeRef={cameraModeRef}
+        recordCameraModeRef={recordCameraModeRef}
         controlModeRef={controlModeRef}
         headlightsManualRef={headlightsManualRef}
         wiperOnRef={wiperOnRef}
@@ -447,9 +541,13 @@ export default function App() {
         hornTriggerRef={hornTriggerRef}
         passengerActionTriggerRef={passengerActionTriggerRef}
         resetTriggerRef={resetTriggerRef}
+        recorderControlRef={recorderControlRef}
+        startShieldOpen={startShieldOpen}
         passengerHud={passengerHud}
         onPassengerHudChange={setPassengerHud}
         onPassengerAction={handlePassengerAction}
+        onJumpToArthur={() => handleJumpToPassenger(PASSENGERS[0])}
+        onRecordingStateChange={setRecordingStatus}
         errandState={errandState}
         errandStateRef={errandStateRef}
         onErrandUpdate={setErrandState}
@@ -460,6 +558,9 @@ export default function App() {
         telemetry={telemetry}
         env={envState}
         cameraMode={cameraMode}
+        recordCameraMode={recordCameraMode}
+        recordingStatus={recordingStatus}
+        startShieldOpen={startShieldOpen}
         controlMode={controlMode}
         muted={muted}
         headlightsOn={headlightsOn}
@@ -468,6 +569,11 @@ export default function App() {
         passengerHud={passengerHud}
         onPassengerAction={handlePassengerAction}
         onCameraChange={handleCameraChange}
+        onRecordCameraChange={handleRecordCameraChange}
+        onToggleRecording={handleToggleRecording}
+        onOpenGuide={handleOpenGuide}
+        touchControlsEnabled={touchControlsEnabled}
+        onToggleTouchControls={() => setTouchControlsEnabled((prev) => !prev)}
         onControlModeChange={handleControlModeChange}
         onWeatherChange={handleWeatherChange}
         onAutoWeatherToggle={handleAutoWeatherToggle}
@@ -503,6 +609,27 @@ export default function App() {
           else if (pedal === 'reverse') controlsRef.current.reversePedal = pressed;
           else controlsRef.current.brakePedal = pressed;
         }}
+      />
+
+      <MobileTouchControls
+        visible={!startShieldOpen && touchControlsEnabled}
+        telemetry={telemetry}
+        controlMode={controlMode}
+        passengerHud={passengerHud}
+        onTouchChange={handleTouchChange}
+        onHorn={handleHorn}
+        onPassengerAction={handlePassengerAction}
+        onToggleIgnition={handleToggleIgnition}
+        onCrankEngine={handleCrankEngine}
+        onHandbrakeCycle={handleHandbrakeCycle}
+      />
+
+      <StartShieldModal
+        open={startShieldOpen}
+        hasStartedOnce={hasStartedOnce}
+        showInstructions={showInstructions}
+        onToggleInstructions={() => setShowInstructions((prev) => !prev)}
+        onStart={handleStartFromShield}
       />
     </main>
   );

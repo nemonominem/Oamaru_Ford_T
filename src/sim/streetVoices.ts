@@ -5,7 +5,8 @@ export type BadDrivingReason =
   | 'offroad'
   | 'hornSpam'
   | 'livestock'
-  | 'piperHit';
+  | 'piperHit'
+  | 'speedTrap';
 
 export interface StreetDialogueEvent {
   id: number;
@@ -152,6 +153,20 @@ const SCOLDING_LINES: Record<BadDrivingReason, LineEntry[]> = {
     {
       role: 'Dockworker',
       text: 'Blimey! You got him! Look at that tartan flying and those drones wheezing!',
+    },
+  ],
+  speedTrap: [
+    {
+      role: 'Constable',
+      text: 'Hold on there! My pocket-watch clocked you well past 22 miles per hour on Thames North!',
+    },
+    {
+      role: 'Constable',
+      text: 'Steady down, motorist! That is a measured speed trap past the Railway Overbridge!',
+    },
+    {
+      role: 'Constable',
+      text: 'You’re in my notebook for furious driving, sir—save the throttle for the open Otago Downs!',
     },
   ],
 };

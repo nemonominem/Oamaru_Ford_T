@@ -2,6 +2,7 @@ import { loadTrialRecords, saveTrialRecords } from './errands';
 import {
   CIRCUIT_CHECKPOINTS,
   OAMARU_LANDMARKS,
+  RADIATOR_STANDPIPE,
   ROAD_OBSTRUCTIONS,
   WORLD_COLLIDERS,
   getTerrainSample,
@@ -231,7 +232,12 @@ export function stepVehiclePhysics(
   let parkBrake = 0;
 
   if (mode === 'standard') {
-    if (controls.throttleInput > 0.05) {
+    if (controls.brakePedal) {
+      serviceBrake = 1.0;
+      desiredGear = 'N';
+      activeThrottle = 0.1;
+      state.handbrakePos = 0.5;
+    } else if (controls.throttleInput > 0.05) {
       activeThrottle = Math.max(0.18, controls.throttleInput);
       activeSpark = clamp(0.25 + (state.rpm - 450) / 1400, 0.25, 0.92);
       desiredGear = state.speedMph < 11.5 ? 'LOW' : 'HIGH';
@@ -252,7 +258,7 @@ export function stepVehiclePhysics(
       state.handbrakePos = 0.5;
     }
 
-    if (controls.reverseInput) {
+    if (!controls.brakePedal && controls.reverseInput) {
       desiredGear = 'REV';
       activeThrottle = Math.max(activeThrottle, 0.35);
     }
@@ -330,23 +336,37 @@ export function stepVehiclePhysics(
       state.stallWarning = state.rpm > 0 && state.rpm < 320;
     }
 
+    const atStandpipe =
+      Math.hypot(state.x - RADIATOR_STANDPIPE.interactionX, state.z - RADIATOR_STANDPIPE.interactionZ) <
+        RADIATOR_STANDPIPE.radius && state.speedMph < 3.5;
+
     // Thermosyphon cooling: lugging in HIGH uphill or holding heavy throttle heats coolant
     const climbLoad = Math.max(0, state.slopePercent) * 0.85;
     const luggingHeat = desiredGear === 'HIGH' && state.speedMph < 13 && activeThrottle > 0.4 ? 11.5 : 0;
     const rpmLoad = (state.rpm / 2000) * 14 + activeThrottle * 9;
     const airflowCool = state.speedMps * 1.1 + (desiredGear === 'LOW' ? 2.5 : 0) + (env.weather === 'rainy' ? 3.5 : 0);
-    const targetTemp = clamp(env.temperatureC + 64 + rpmLoad + climbLoad + luggingHeat - airflowCool, 58, 108);
-    state.engineTempC = approach(state.engineTempC, targetTemp, targetTemp > state.engineTempC ? 1.45 : 0.85, dt);
+    const targetTemp = atStandpipe
+      ? Math.max(env.temperatureC + 18, 56)
+      : clamp(env.temperatureC + 64 + rpmLoad + climbLoad + luggingHeat - airflowCool, 58, 108);
+    const coolRate = atStandpipe ? 16.0 : targetTemp > state.engineTempC ? 1.45 : 0.85;
+    state.engineTempC = approach(state.engineTempC, targetTemp, coolRate, dt);
     state.isOverheating = state.engineTempC >= 100.5;
   } else {
     state.rpm = approach(state.rpm, 0, 1400, dt);
     state.knocking = false;
     state.stallWarning = false;
-    state.engineTempC = approach(state.engineTempC, Math.max(env.temperatureC + 10, 24), 0.55, dt);
+    const atStandpipe =
+      Math.hypot(state.x - RADIATOR_STANDPIPE.interactionX, state.z - RADIATOR_STANDPIPE.interactionZ) <
+        RADIATOR_STANDPIPE.radius && state.speedMph < 3.5;
+    const offTargetTemp = atStandpipe ? Math.max(env.temperatureC + 12, 42) : Math.max(env.temperatureC + 10, 24);
+    state.engineTempC = approach(state.engineTempC, offTargetTemp, atStandpipe ? 16.0 : 0.55, dt);
     state.isOverheating = state.engineTempC >= 100.5;
   }
 
-  // 4. Sample Terrain at 4 Wheel Corners with Seasonal Weather & Temperature Traction
+  // 4. Sample Terrain at Center & 4 Wheel Corners with Seasonal Weather & Temperature Traction
+  const centerSample = getTerrainSample(state.x, state.z);
+  state.currentSurface = centerSample.surface;
+
   let avgTerrainH = 0;
   let avgGrip = 0;
   let avgRollRes = 0;
@@ -360,11 +380,17 @@ export function stepVehiclePhysics(
     const sample = getTerrainSample(wx, wz);
     const { gripMult, rollMult } = getWeatherGripMultiplier(sample.surface, env);
 
+    // Prevent a wheel overhanging the harbour cliff or steep drop-off from dragging the chassis underground
+    const clampedSampleHeight =
+      centerSample.surface !== 'water' && (sample.surface === 'water' || sample.height < centerSample.height - 0.34)
+        ? Math.max(sample.height, centerSample.height - 0.34)
+        : sample.height;
+
     const wheelWave =
       Math.sin(state.wheels[i].spinAngle * 2.2 + i * 1.4) *
       sample.bumpAmplitude *
       clamp(state.speedMps / 4, 0, 1);
-    const h = sample.height + wheelWave;
+    const h = clampedSampleHeight + wheelWave;
 
     cornerHeights[i] = h;
     avgTerrainH += h;
@@ -384,8 +410,6 @@ export function stepVehiclePhysics(
   avgRollRes *= 0.25;
   avgRutPull *= 0.25;
 
-  const centerSample = getTerrainSample(state.x, state.z);
-  state.currentSurface = centerSample.surface;
   state.effectiveGrip = avgGrip;
 
   const slopeCos = centerSample.normalX * fwdX + centerSample.normalZ * fwdZ;
@@ -472,8 +496,8 @@ export function stepVehiclePhysics(
     state.vz *= -0.25;
   }
 
-  state.x = clamp(state.x, -185, 166);
-  state.z = clamp(state.z, -165, 175);
+  state.x = clamp(state.x, -190, 166);
+  state.z = clamp(state.z, -172, 222);
 
   const carRadius = 1.25;
   for (const box of WORLD_COLLIDERS) {
@@ -483,19 +507,35 @@ export function stepVehiclePhysics(
     const dz = state.z - closestZ;
     const distSq = dx * dx + dz * dz;
     if (distSq < carRadius * carRadius) {
-      const dist = Math.sqrt(distSq) || 0.001;
-      const nx = dx / dist;
-      const nz = dz / dist;
-      const pen = carRadius - dist;
-      state.x += nx * pen;
-      state.z += nz * pen;
+      const dist = Math.sqrt(distSq);
+      let nx = 0;
+      let nz = 0;
+      let pen = 0;
+      if (dist > 1e-4) {
+        nx = dx / dist;
+        nz = dz / dist;
+        pen = carRadius - dist;
+      } else {
+        // Fallback normal away from box center if vehicle center slipped inside bounds
+        const cx = (box.minX + box.maxX) * 0.5;
+        const cz = (box.minZ + box.maxZ) * 0.5;
+        const odx = state.x - cx;
+        const odz = state.z - cz;
+        const oLen = Math.hypot(odx, odz) || 1;
+        nx = odx / oLen;
+        nz = odz / oLen;
+        pen = carRadius * 0.5;
+      }
+      const clampedPen = Math.min(pen, 1.5);
+      state.x += nx * clampedPen;
+      state.z += nz * clampedPen;
       const vn = state.vx * nx + state.vz * nz;
       if (vn < 0) {
         if (vn < -1.1) {
           state.impactStrength = Math.max(state.impactStrength, clamp(Math.abs(vn) / 6, 0.2, 1.0));
         }
-        state.vx -= 1.3 * vn * nx;
-        state.vz -= 1.3 * vn * nz;
+        state.vx -= 1.25 * vn * nx;
+        state.vz -= 1.25 * vn * nz;
       }
     }
   }
@@ -511,7 +551,7 @@ export function stepVehiclePhysics(
       const dist = Math.sqrt(distSq) || 0.001;
       const nx = dx / dist;
       const nz = dz / dist;
-      const pen = minDist - dist;
+      const pen = Math.min(minDist - dist, 1.2);
       state.x += nx * pen;
       state.z += nz * pen;
       const vn = state.vx * nx + state.vz * nz;
@@ -519,8 +559,8 @@ export function stepVehiclePhysics(
         if (vn < -0.9) {
           state.impactStrength = Math.max(state.impactStrength, clamp(Math.abs(vn) / 4.8, 0.22, 0.95));
         }
-        state.vx -= 1.25 * vn * nx;
-        state.vz -= 1.25 * vn * nz;
+        state.vx -= 1.2 * vn * nx;
+        state.vz -= 1.2 * vn * nz;
       }
     }
   }
@@ -543,13 +583,15 @@ export function stepVehiclePhysics(
     state.courtesyScore = clamp(state.courtesyScore + dt * 0.35, 0, 100);
   }
 
-  // 9. Suspension Heave, Pitch & Roll
-  const targetY = avgTerrainH;
+  // 9. Suspension Heave, Pitch & Roll (never sink below ground at vehicle center)
+  const postSample = getTerrainSample(state.x, state.z);
+  const targetY = Math.max(avgTerrainH, postSample.height - 0.04);
   const ySpring = (targetY - state.y) * 95 - state.vy * 14;
   state.vy += ySpring * dt;
   state.y += state.vy * dt;
-  if (state.y < targetY - 0.14) {
-    state.y = targetY - 0.14;
+  const floorGuardY = Math.max(targetY - 0.12, postSample.height - 0.05);
+  if (state.y < floorGuardY) {
+    state.y = floorGuardY;
     state.vy = Math.max(0, state.vy);
   }
 
@@ -558,8 +600,8 @@ export function stepVehiclePhysics(
   const leftH = 0.5 * (cornerHeights[0] + cornerHeights[2]);
   const rightH = 0.5 * (cornerHeights[1] + cornerHeights[3]);
 
-  const terrainPitch = Math.atan2(rearH - frontH, WHEELBASE);
-  const terrainRoll = Math.atan2(rightH - leftH, HALF_TRACK * 2);
+  const terrainPitch = clamp(Math.atan2(rearH - frontH, WHEELBASE), -0.30, 0.30);
+  const terrainRoll = clamp(Math.atan2(rightH - leftH, HALF_TRACK * 2), -0.26, 0.26);
 
   const accelPitch = clamp(-(netLongitudinal / MASS_KG) * 0.012, -0.06, 0.06);
   const cornerRoll = clamp(state.yawRate * forwardVel * 0.016, -0.09, 0.09);
@@ -567,8 +609,8 @@ export function stepVehiclePhysics(
     ? Math.sin(performance.now() * 0.045) * 0.0025 * (1 - clamp(state.speedMps / 5, 0, 1))
     : 0;
 
-  state.pitch = approach(state.pitch, terrainPitch + accelPitch, 1.2, dt);
-  state.roll = approach(state.roll, terrainRoll + cornerRoll + idleVibration, 1.4, dt);
+  state.pitch = clamp(approach(state.pitch, terrainPitch + accelPitch, 1.2, dt), -0.32, 0.32);
+  state.roll = clamp(approach(state.roll, terrainRoll + cornerRoll + idleVibration, 1.4, dt), -0.28, 0.28);
 
   // 10. Nearest Landmark
   let closest = OAMARU_LANDMARKS[0];

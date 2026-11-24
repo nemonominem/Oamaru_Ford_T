@@ -1,12 +1,22 @@
 import * as THREE from 'three';
 
+export type SignStyle = 'goldleaf' | 'ghost' | 'painted' | 'roofsign';
+
 export interface TextureBundle {
   limestone: THREE.CanvasTexture;
+  limestoneBump: THREE.CanvasTexture;
   limestoneRusticated: THREE.CanvasTexture;
+  limestoneRusticatedBump: THREE.CanvasTexture;
   polychromeStone: THREE.CanvasTexture;
   archedWindow: THREE.CanvasTexture;
+  openSashWindow: THREE.CanvasTexture;
+  shopfrontWindow: THREE.CanvasTexture;
   castIronLace: THREE.CanvasTexture;
+  balustradeStone: THREE.CanvasTexture;
+  stripedAwning: THREE.CanvasTexture;
+  footpathStone: THREE.CanvasTexture;
   timberDoors: THREE.CanvasTexture;
+  posterCollage: THREE.CanvasTexture;
   cobbles: THREE.CanvasTexture;
   cobblesBump: THREE.CanvasTexture;
   macadam: THREE.CanvasTexture;
@@ -14,7 +24,23 @@ export interface TextureBundle {
   wharfTimber: THREE.CanvasTexture;
   corrugatedIron: THREE.CanvasTexture;
   grass: THREE.CanvasTexture;
-  createSignTexture: (title: string, subtitle: string, bgColor?: string, textColor?: string) => THREE.CanvasTexture;
+  radiatorHoneycomb: THREE.CanvasTexture;
+  clockFace: THREE.CanvasTexture;
+  createSignTexture: (
+    title: string,
+    subtitle: string,
+    bgColor?: string,
+    textColor?: string,
+    style?: SignStyle
+  ) => THREE.CanvasTexture;
+  createVintageAdTexture: (
+    headline: string,
+    subline: string,
+    bgColor: string,
+    fgColor: string,
+    accentColor: string,
+    kind: 'mural' | 'blade' | 'aboard'
+  ) => THREE.CanvasTexture;
   dispose: () => void;
 }
 
@@ -49,14 +75,21 @@ function configureTexture(
 export function createProceduralTextures(maxAnisotropy: number): TextureBundle {
   const createdTextures: THREE.CanvasTexture[] = [];
 
-  // 1. Oamaru Whitestone Ashlar Limestone
+  // 1. Oamaru Whitestone Ashlar Limestone + Relief Bump Map
   const limeCanvas = document.createElement('canvas');
   limeCanvas.width = 512;
   limeCanvas.height = 512;
   const lCtx = limeCanvas.getContext('2d')!;
+  const limeBumpCanvas = document.createElement('canvas');
+  limeBumpCanvas.width = 512;
+  limeBumpCanvas.height = 512;
+  const lbCtx = limeBumpCanvas.getContext('2d')!;
   const randLime = seededNoise(1914);
-  lCtx.fillStyle = '#dfd4be';
+
+  lCtx.fillStyle = '#ddd1b9';
   lCtx.fillRect(0, 0, 512, 512);
+  lbCtx.fillStyle = '#505050';
+  lbCtx.fillRect(0, 0, 512, 512);
 
   const rows = 8;
   const rowH = 512 / rows;
@@ -67,31 +100,58 @@ export function createProceduralTextures(maxAnisotropy: number): TextureBundle {
     for (let c = -1; c <= cols; c++) {
       const bx = c * colW + offset;
       const by = r * rowH;
-      const shade = Math.floor((randLime() - 0.5) * 14);
-      const red = 223 + shade;
-      const green = 212 + shade;
-      const blue = 188 + shade;
+      const shade = Math.floor((randLime() - 0.5) * 16);
+      const red = 222 + shade;
+      const green = 210 + shade;
+      const blue = 185 + shade;
       lCtx.fillStyle = `rgb(${red},${green},${blue})`;
       lCtx.fillRect(bx + 2, by + 2, colW - 4, rowH - 4);
 
-      for (let g = 0; g < 35; g++) {
-        lCtx.fillStyle = randLime() > 0.5 ? 'rgba(175,160,132,0.16)' : 'rgba(248,244,232,0.18)';
-        lCtx.fillRect(bx + 4 + randLime() * (colW - 8), by + 4 + randLime() * (rowH - 8), 2, 2);
+      const bumpBase = 185 + Math.floor((randLime() - 0.5) * 28);
+      lbCtx.fillStyle = `rgb(${bumpBase},${bumpBase},${bumpBase})`;
+      lbCtx.fillRect(bx + 3, by + 3, colW - 6, rowH - 6);
+
+      // Soft fossil limestone grain & vertical saw tooling
+      for (let g = 0; g < 42; g++) {
+        const gx = bx + 4 + randLime() * (colW - 8);
+        const gy = by + 4 + randLime() * (rowH - 8);
+        lCtx.fillStyle = randLime() > 0.5 ? 'rgba(170,154,126,0.20)' : 'rgba(249,245,233,0.22)';
+        lCtx.fillRect(gx, gy, 2 + randLime() * 3, 2);
+        const bv = randLime() > 0.5 ? 140 : 225;
+        lbCtx.fillStyle = `rgba(${bv},${bv},${bv},0.35)`;
+        lbCtx.fillRect(gx, gy, 2 + randLime() * 2, 2);
       }
+      // Subtle weathering stain under horizontal joints
+      const stain = lCtx.createLinearGradient(0, by, 0, by + 16);
+      stain.addColorStop(0, 'rgba(116,102,80,0.22)');
+      stain.addColorStop(1, 'rgba(116,102,80,0)');
+      lCtx.fillStyle = stain;
+      lCtx.fillRect(bx + 2, by + 2, colW - 4, 16);
     }
-    lCtx.fillStyle = 'rgba(130,118,98,0.45)';
-    lCtx.fillRect(0, r * rowH, 512, 2);
+    lCtx.fillStyle = 'rgba(122,110,90,0.55)';
+    lCtx.fillRect(0, r * rowH, 512, 2.5);
+    lbCtx.fillStyle = '#383838';
+    lbCtx.fillRect(0, r * rowH, 512, 3);
   }
   const limestone = configureTexture(limeCanvas, 2, 2, maxAnisotropy, true);
-  createdTextures.push(limestone);
+  const limestoneBump = configureTexture(limeBumpCanvas, 2, 2, maxAnisotropy, false);
+  createdTextures.push(limestone, limestoneBump);
 
-  // 2. Rusticated Limestone Base
+  // 2. Rusticated Limestone Base + Chamfered Relief Bump Map
   const rustCanvas = document.createElement('canvas');
   rustCanvas.width = 512;
   rustCanvas.height = 512;
   const rCtx = rustCanvas.getContext('2d')!;
-  rCtx.fillStyle = '#d3c6ad';
+  const rustBumpCanvas = document.createElement('canvas');
+  rustBumpCanvas.width = 512;
+  rustBumpCanvas.height = 512;
+  const rbCtx = rustBumpCanvas.getContext('2d')!;
+
+  rCtx.fillStyle = '#cfc2a7';
   rCtx.fillRect(0, 0, 512, 512);
+  rbCtx.fillStyle = '#282828';
+  rbCtx.fillRect(0, 0, 512, 512);
+
   const randRust = seededNoise(1882);
   for (let r = 0; r < 6; r++) {
     const h = 512 / 6;
@@ -100,16 +160,28 @@ export function createProceduralTextures(maxAnisotropy: number): TextureBundle {
     for (let c = -1; c <= 3; c++) {
       const x = c * w + off;
       const y = r * h;
-      const v = Math.floor((randRust() - 0.5) * 16);
-      rCtx.fillStyle = `rgb(${212 + v},${199 + v},${174 + v})`;
-      rCtx.fillRect(x + 4, y + 4, w - 8, h - 8);
-      rCtx.strokeStyle = 'rgba(95,84,68,0.5)';
-      rCtx.lineWidth = 3;
-      rCtx.strokeRect(x + 2, y + 2, w - 4, h - 4);
+      const v = Math.floor((randRust() - 0.5) * 18);
+      rCtx.fillStyle = `rgb(${210 + v},${197 + v},${171 + v})`;
+      rCtx.fillRect(x + 5, y + 5, w - 10, h - 10);
+      rCtx.strokeStyle = 'rgba(86,75,60,0.58)';
+      rCtx.lineWidth = 4;
+      rCtx.strokeRect(x + 3, y + 3, w - 6, h - 6);
+
+      // Raised pillowed block face for rusticated bump
+      rbCtx.fillStyle = '#909090';
+      rbCtx.fillRect(x + 4, y + 4, w - 8, h - 8);
+      rbCtx.fillStyle = '#e2e2e2';
+      rbCtx.fillRect(x + 9, y + 9, w - 18, h - 18);
+      for (let g = 0; g < 24; g++) {
+        const bv = 175 + Math.floor(randRust() * 65);
+        rbCtx.fillStyle = `rgb(${bv},${bv},${bv})`;
+        rbCtx.fillRect(x + 10 + randRust() * (w - 20), y + 10 + randRust() * (h - 20), 3, 2);
+      }
     }
   }
   const limestoneRusticated = configureTexture(rustCanvas, 2, 1, maxAnisotropy, true);
-  createdTextures.push(limestoneRusticated);
+  const limestoneRusticatedBump = configureTexture(rustBumpCanvas, 2, 1, maxAnisotropy, false);
+  createdTextures.push(limestoneRusticated, limestoneRusticatedBump);
 
   // 3. Polychrome Oamaru Stone + Otago Basalt Bands (Venetian Gothic Harbour Board)
   const polyCanvas = document.createElement('canvas');
@@ -131,54 +203,194 @@ export function createProceduralTextures(maxAnisotropy: number): TextureBundle {
   const polychromeStone = configureTexture(polyCanvas, 2, 2, maxAnisotropy, true);
   createdTextures.push(polychromeStone);
 
-  // 4. Victorian Arched Sash Window Texture
+  // 4. Victorian Arched Sash Window Glazing Texture (fits inside 3D stone reveals)
   const winCanvas = document.createElement('canvas');
   winCanvas.width = 256;
   winCanvas.height = 384;
   const wiCtx = winCanvas.getContext('2d')!;
-  wiCtx.fillStyle = '#dfd4be';
+  wiCtx.fillStyle = '#dcd0b8';
   wiCtx.fillRect(0, 0, 256, 384);
-  // Recessed arch frame
-  wiCtx.fillStyle = '#ebe3d3';
-  wiCtx.beginPath();
-  wiCtx.arc(128, 108, 92, Math.PI, 0);
-  wiCtx.lineTo(220, 360);
-  wiCtx.lineTo(36, 360);
-  wiCtx.closePath();
-  wiCtx.fill();
-  wiCtx.lineWidth = 8;
-  wiCtx.strokeStyle = '#9c8f77';
-  wiCtx.stroke();
 
-  // Glass panes
-  wiCtx.fillStyle = '#25313b';
+  // Inner painted timber box frame
+  wiCtx.fillStyle = '#f0ead9';
   wiCtx.beginPath();
-  wiCtx.arc(128, 112, 74, Math.PI, 0);
-  wiCtx.lineTo(202, 344);
-  wiCtx.lineTo(54, 344);
+  wiCtx.arc(128, 96, 108, Math.PI, 0);
+  wiCtx.lineTo(236, 368);
+  wiCtx.lineTo(20, 368);
   wiCtx.closePath();
   wiCtx.fill();
 
-  // Timber sash muntin bars
-  wiCtx.strokeStyle = '#ede5d4';
-  wiCtx.lineWidth = 6;
+  // Deep leaded glass with subtle interior depth & curtain suggestion
+  const glassGrad = wiCtx.createLinearGradient(0, 24, 0, 354);
+  glassGrad.addColorStop(0, '#1e2c38');
+  glassGrad.addColorStop(0.45, '#2b3d4a');
+  glassGrad.addColorStop(1, '#18222b');
+  wiCtx.fillStyle = glassGrad;
   wiCtx.beginPath();
-  wiCtx.moveTo(128, 38);
-  wiCtx.lineTo(128, 344);
-  wiCtx.moveTo(54, 112);
-  wiCtx.lineTo(202, 112);
-  wiCtx.moveTo(54, 195);
-  wiCtx.lineTo(202, 195);
-  wiCtx.moveTo(54, 272);
-  wiCtx.lineTo(202, 272);
+  wiCtx.arc(128, 102, 92, Math.PI, 0);
+  wiCtx.lineTo(220, 354);
+  wiCtx.lineTo(36, 354);
+  wiCtx.closePath();
+  wiCtx.fill();
+
+  // Soft interior lace/drapery shadows near sides
+  wiCtx.fillStyle = 'rgba(232, 221, 198, 0.14)';
+  wiCtx.fillRect(36, 108, 32, 246);
+  wiCtx.fillRect(188, 108, 32, 246);
+  // Diagonal sky glint on panes
+  wiCtx.fillStyle = 'rgba(195, 222, 238, 0.16)';
+  wiCtx.beginPath();
+  wiCtx.moveTo(46, 180);
+  wiCtx.lineTo(130, 62);
+  wiCtx.lineTo(165, 62);
+  wiCtx.lineTo(66, 206);
+  wiCtx.closePath();
+  wiCtx.fill();
+
+  // Fanlight spokes in arch + timber sash muntin bars
+  wiCtx.strokeStyle = '#ece4d2';
+  wiCtx.lineWidth = 7;
+  wiCtx.beginPath();
+  wiCtx.moveTo(128, 10);
+  wiCtx.lineTo(128, 354);
+  wiCtx.moveTo(36, 102);
+  wiCtx.lineTo(220, 102);
+  wiCtx.moveTo(128, 102);
+  wiCtx.lineTo(64, 34);
+  wiCtx.moveTo(128, 102);
+  wiCtx.lineTo(192, 34);
+  wiCtx.moveTo(36, 188);
+  wiCtx.lineTo(220, 188);
+  wiCtx.moveTo(36, 272);
+  wiCtx.lineTo(220, 272);
   wiCtx.stroke();
-  // Keystone
-  wiCtx.fillStyle = '#cfc2a7';
-  wiCtx.fillRect(112, 10, 32, 34);
   const archedWindow = configureTexture(winCanvas, 1, 1, maxAnisotropy, true);
   archedWindow.wrapS = THREE.ClampToEdgeWrapping;
   archedWindow.wrapT = THREE.ClampToEdgeWrapping;
   createdTextures.push(archedWindow);
+
+  // 4a-open. Raised-Sash Open Victorian Window (lower sash slid upward revealing warm interior depth)
+  const openWinCanvas = document.createElement('canvas');
+  openWinCanvas.width = 256;
+  openWinCanvas.height = 384;
+  const owCtx = openWinCanvas.getContext('2d')!;
+  owCtx.fillStyle = '#dcd0b8';
+  owCtx.fillRect(0, 0, 256, 384);
+
+  // Painted box frame
+  owCtx.fillStyle = '#ede5d2';
+  owCtx.beginPath();
+  owCtx.arc(128, 96, 108, Math.PI, 0);
+  owCtx.lineTo(236, 368);
+  owCtx.lineTo(20, 368);
+  owCtx.closePath();
+  owCtx.fill();
+
+  // Warm shadowed open interior chamber
+  const roomGrad = owCtx.createLinearGradient(0, 28, 0, 354);
+  roomGrad.addColorStop(0, '#14110d');
+  roomGrad.addColorStop(0.55, '#2b2015');
+  roomGrad.addColorStop(1, '#3d2a18');
+  owCtx.fillStyle = roomGrad;
+  owCtx.beginPath();
+  owCtx.arc(128, 102, 92, Math.PI, 0);
+  owCtx.lineTo(220, 354);
+  owCtx.lineTo(36, 354);
+  owCtx.closePath();
+  owCtx.fill();
+
+  // Parted lace curtains swaying inside open lower casement
+  owCtx.fillStyle = 'rgba(242, 228, 198, 0.34)';
+  owCtx.beginPath();
+  owCtx.moveTo(36, 120);
+  owCtx.quadraticCurveTo(84, 240, 48, 354);
+  owCtx.lineTo(36, 354);
+  owCtx.closePath();
+  owCtx.fill();
+  owCtx.beginPath();
+  owCtx.moveTo(220, 120);
+  owCtx.quadraticCurveTo(172, 240, 208, 354);
+  owCtx.lineTo(220, 354);
+  owCtx.closePath();
+  owCtx.fill();
+
+  // Warm parlour lamp glow hint in interior
+  const lampGlow = owCtx.createRadialGradient(128, 285, 6, 128, 285, 68);
+  lampGlow.addColorStop(0, 'rgba(255, 210, 125, 0.45)');
+  lampGlow.addColorStop(1, 'rgba(255, 190, 90, 0)');
+  owCtx.fillStyle = lampGlow;
+  owCtx.fillRect(42, 215, 172, 138);
+
+  // Upper fanlight + raised lower sash tucked mid-height (leaving bottom half clearly open!)
+  owCtx.fillStyle = 'rgba(34, 52, 66, 0.72)';
+  owCtx.fillRect(36, 118, 184, 104);
+  owCtx.strokeStyle = '#efe7d6';
+  owCtx.lineWidth = 7;
+  owCtx.strokeRect(36, 118, 184, 104);
+  owCtx.beginPath();
+  owCtx.moveTo(128, 10);
+  owCtx.lineTo(128, 222);
+  owCtx.moveTo(36, 102);
+  owCtx.lineTo(220, 102);
+  owCtx.moveTo(128, 102);
+  owCtx.lineTo(64, 34);
+  owCtx.moveTo(128, 102);
+  owCtx.lineTo(192, 34);
+  owCtx.moveTo(36, 172);
+  owCtx.lineTo(220, 172);
+  owCtx.stroke();
+
+  // Dark open sill lip at bottom
+  owCtx.fillStyle = '#c5b89e';
+  owCtx.fillRect(28, 348, 200, 14);
+
+  const openSashWindow = configureTexture(openWinCanvas, 1, 1, maxAnisotropy, true);
+  openSashWindow.wrapS = THREE.ClampToEdgeWrapping;
+  openSashWindow.wrapT = THREE.ClampToEdgeWrapping;
+  createdTextures.push(openSashWindow);
+
+  // 4b. Victorian Ground-Floor Shopfront Display Window (timber stallboard + leaded transom)
+  const shopCanvas = document.createElement('canvas');
+  shopCanvas.width = 256;
+  shopCanvas.height = 384;
+  const shCtx = shopCanvas.getContext('2d')!;
+  shCtx.fillStyle = '#2d231b';
+  shCtx.fillRect(0, 0, 256, 384);
+  // Timber stallboard base
+  shCtx.fillStyle = '#3b2b1e';
+  shCtx.fillRect(10, 286, 236, 88);
+  shCtx.strokeStyle = '#6e563f';
+  shCtx.lineWidth = 5;
+  shCtx.strokeRect(22, 298, 96, 62);
+  shCtx.strokeRect(138, 298, 96, 62);
+  // Main display glass
+  const shopGrad = shCtx.createLinearGradient(0, 18, 0, 280);
+  shopGrad.addColorStop(0, '#263642');
+  shopGrad.addColorStop(0.55, '#3b4a4e');
+  shopGrad.addColorStop(1, '#222b30');
+  shCtx.fillStyle = shopGrad;
+  shCtx.fillRect(16, 18, 224, 260);
+  // Warm interior display shelf hint
+  shCtx.fillStyle = 'rgba(220, 178, 108, 0.16)';
+  shCtx.fillRect(28, 178, 200, 92);
+  // Brass/gilt window mullions + leaded transom lights
+  shCtx.strokeStyle = '#c8aa6c';
+  shCtx.lineWidth = 5;
+  shCtx.strokeRect(16, 18, 224, 260);
+  shCtx.beginPath();
+  shCtx.moveTo(16, 82);
+  shCtx.lineTo(240, 82);
+  shCtx.moveTo(128, 18);
+  shCtx.lineTo(128, 278);
+  shCtx.moveTo(72, 18);
+  shCtx.lineTo(72, 82);
+  shCtx.moveTo(184, 18);
+  shCtx.lineTo(184, 82);
+  shCtx.stroke();
+  const shopfrontWindow = configureTexture(shopCanvas, 1, 1, maxAnisotropy, true);
+  shopfrontWindow.wrapS = THREE.ClampToEdgeWrapping;
+  shopfrontWindow.wrapT = THREE.ClampToEdgeWrapping;
+  createdTextures.push(shopfrontWindow);
 
   // 5. Cast-Iron Lacework Verandah Balustrade Alpha Texture
   const laceCanvas = document.createElement('canvas');
@@ -203,6 +415,92 @@ export function createProceduralTextures(maxAnisotropy: number): TextureBundle {
   }
   const castIronLace = configureTexture(laceCanvas, 4, 1, maxAnisotropy, true);
   createdTextures.push(castIronLace);
+
+  // 5b. Carved Oamaru Limestone Pierced Balustrade Parapet Texture (from archival photo 3)
+  const balCanvas = document.createElement('canvas');
+  balCanvas.width = 512;
+  balCanvas.height = 192;
+  const bCtx = balCanvas.getContext('2d')!;
+  bCtx.clearRect(0, 0, 512, 192);
+  // Top & bottom moulded coping rails
+  bCtx.fillStyle = '#e5dac3';
+  bCtx.fillRect(0, 0, 512, 34);
+  bCtx.fillRect(0, 154, 512, 38);
+  bCtx.fillStyle = '#c4b69b';
+  bCtx.fillRect(0, 30, 512, 7);
+  bCtx.fillRect(0, 148, 512, 8);
+  // End stone piers + turned vase balusters with open sky gaps
+  bCtx.fillStyle = '#e2d7bf';
+  bCtx.fillRect(0, 34, 42, 120);
+  bCtx.fillRect(470, 34, 42, 120);
+  for (let bx = 56; bx < 456; bx += 44) {
+    // Turned classical stone baluster profile
+    bCtx.fillStyle = '#dfd3ba';
+    bCtx.fillRect(bx + 6, 34, 20, 14);
+    bCtx.beginPath();
+    bCtx.ellipse(bx + 16, 98, 12, 34, 0, 0, Math.PI * 2);
+    bCtx.fill();
+    bCtx.fillRect(bx + 8, 50, 16, 22);
+    bCtx.fillRect(bx + 5, 134, 22, 20);
+    bCtx.strokeStyle = 'rgba(130, 115, 92, 0.45)';
+    bCtx.lineWidth = 2;
+    bCtx.strokeRect(bx + 6, 35, 20, 118);
+  }
+  const balustradeStone = configureTexture(balCanvas, 3, 1, maxAnisotropy, true);
+  createdTextures.push(balustradeStone);
+
+  // 5c. Striped Canvas Shop Awning / Sun-Blind Texture (archival photos 1 & 3)
+  const awnCanvas = document.createElement('canvas');
+  awnCanvas.width = 256;
+  awnCanvas.height = 256;
+  const aCtx = awnCanvas.getContext('2d')!;
+  aCtx.fillStyle = '#e6dcc5';
+  aCtx.fillRect(0, 0, 256, 256);
+  for (let x = 0; x < 256; x += 32) {
+    aCtx.fillStyle = (x / 32) % 2 === 0 ? '#5b634b' : '#e6dcc5';
+    aCtx.fillRect(x, 0, 16, 256);
+    aCtx.fillStyle = 'rgba(116, 100, 78, 0.14)';
+    aCtx.fillRect(x + 15, 0, 2, 256);
+  }
+  // Subtle woven linen grain
+  const randAwn = seededNoise(1911);
+  for (let i = 0; i < 1600; i++) {
+    aCtx.fillStyle = randAwn() > 0.5 ? 'rgba(255,250,240,0.12)' : 'rgba(60,50,38,0.1)';
+    aCtx.fillRect(randAwn() * 256, randAwn() * 256, 3, 1.5);
+  }
+  const stripedAwning = configureTexture(awnCanvas, 2, 1, maxAnisotropy, true);
+  createdTextures.push(stripedAwning);
+
+  // 5d. Dressed Limestone Flagstone Sidewalk Paving
+  const fpCanvas = document.createElement('canvas');
+  fpCanvas.width = 512;
+  fpCanvas.height = 512;
+  const fpCtx = fpCanvas.getContext('2d')!;
+  fpCtx.fillStyle = '#c8bca3';
+  fpCtx.fillRect(0, 0, 512, 512);
+  const randFp = seededNoise(1885);
+  const fpRows = 6;
+  const fpCols = 4;
+  const fpH = 512 / fpRows;
+  const fpW = 512 / fpCols;
+  for (let r = 0; r < fpRows; r++) {
+    const off = (r % 2) * (fpW * 0.5);
+    for (let c = -1; c <= fpCols; c++) {
+      const fx = c * fpW + off;
+      const fy = r * fpH;
+      const tone = Math.floor((randFp() - 0.5) * 16);
+      fpCtx.fillStyle = `rgb(${205 + tone},${194 + tone},${170 + tone})`;
+      fpCtx.fillRect(fx + 2, fy + 2, fpW - 4, fpH - 4);
+      for (let g = 0; g < 26; g++) {
+        fpCtx.fillStyle = randFp() > 0.5 ? 'rgba(128,116,96,0.16)' : 'rgba(244,238,224,0.18)';
+        fpCtx.fillRect(fx + 4 + randFp() * (fpW - 8), fy + 4 + randFp() * (fpH - 8), 3, 2);
+      }
+    }
+    fpCtx.fillStyle = 'rgba(92,82,68,0.38)';
+    fpCtx.fillRect(0, r * fpH, 512, 2);
+  }
+  const footpathStone = configureTexture(fpCanvas, 12, 3, maxAnisotropy, true);
+  createdTextures.push(footpathStone);
 
   // 6. Heavy Timber Warehouse Loading Bay Doors
   const doorCanvas = document.createElement('canvas');
@@ -379,34 +677,143 @@ export function createProceduralTextures(maxAnisotropy: number): TextureBundle {
   const grass = configureTexture(grassCanvas, 28, 28, maxAnisotropy, true);
   createdTextures.push(grass);
 
-  // 13. Period Fascia Sign Factory
+  // 13. Model T Brass Honeycomb Radiator Grille Texture
+  const radCanvas = document.createElement('canvas');
+  radCanvas.width = 256;
+  radCanvas.height = 256;
+  const radCtx = radCanvas.getContext('2d')!;
+  radCtx.fillStyle = '#181410';
+  radCtx.fillRect(0, 0, 256, 256);
+  // Fine horizontal cooling fins & vertical water tubes
+  for (let y = 4; y < 256; y += 8) {
+    radCtx.fillStyle = y % 16 === 4 ? '#3d3121' : '#262017';
+    radCtx.fillRect(0, y, 256, 3);
+  }
+  for (let x = 8; x < 256; x += 14) {
+    radCtx.fillStyle = '#4f3f26';
+    radCtx.fillRect(x, 0, 3, 256);
+  }
+  // Subtle bronze-brass honeycomb sheen
+  radCtx.strokeStyle = 'rgba(186, 140, 62, 0.25)';
+  radCtx.lineWidth = 1;
+  radCtx.strokeRect(2, 2, 252, 252);
+  const radiatorHoneycomb = configureTexture(radCanvas, 1, 1, maxAnisotropy, true);
+  radiatorHoneycomb.wrapS = THREE.ClampToEdgeWrapping;
+  radiatorHoneycomb.wrapT = THREE.ClampToEdgeWrapping;
+  createdTextures.push(radiatorHoneycomb);
+
+  // 14. Oamaru Chief Post Office Illuminated Clock Dial
+  const clkCanvas = document.createElement('canvas');
+  clkCanvas.width = 256;
+  clkCanvas.height = 256;
+  const clkCtx = clkCanvas.getContext('2d')!;
+  clkCtx.fillStyle = '#f3ebd8';
+  clkCtx.beginPath();
+  clkCtx.arc(128, 128, 122, 0, Math.PI * 2);
+  clkCtx.fill();
+  clkCtx.strokeStyle = '#2d241b';
+  clkCtx.lineWidth = 7;
+  clkCtx.beginPath();
+  clkCtx.arc(128, 128, 114, 0, Math.PI * 2);
+  clkCtx.stroke();
+  clkCtx.lineWidth = 2;
+  clkCtx.beginPath();
+  clkCtx.arc(128, 128, 96, 0, Math.PI * 2);
+  clkCtx.stroke();
+  const numerals = ['XII', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI'];
+  clkCtx.fillStyle = '#1e1914';
+  clkCtx.font = 'bold 20px Georgia, serif';
+  clkCtx.textAlign = 'center';
+  clkCtx.textBaseline = 'middle';
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2 - Math.PI / 2;
+    clkCtx.fillText(numerals[i], 128 + Math.cos(a) * 82, 128 + Math.sin(a) * 82);
+  }
+  const clockFace = configureTexture(clkCanvas, 1, 1, maxAnisotropy, true);
+  clockFace.wrapS = THREE.ClampToEdgeWrapping;
+  clockFace.wrapT = THREE.ClampToEdgeWrapping;
+  createdTextures.push(clockFace);
+
+  // 15. Period Fascia & Weathered Ghost Sign Factory
   const createSignTexture = (
     title: string,
     subtitle: string,
     bgColor = '#222b24',
-    textColor = '#e6c57a'
+    textColor = '#e6c57a',
+    style: SignStyle = 'goldleaf'
   ): THREE.CanvasTexture => {
     const sCanvas = document.createElement('canvas');
     sCanvas.width = 1024;
     sCanvas.height = 256;
     const ctx = sCanvas.getContext('2d')!;
+    const randSign = seededNoise(title.length * 97 + subtitle.length * 31);
 
-    ctx.fillStyle = bgColor;
-    ctx.fillRect(0, 0, 1024, 256);
+    if (style === 'ghost') {
+      // Weathered Oamaru stone / painted mercantile ghost sign
+      ctx.fillStyle = '#d3c6ab';
+      ctx.fillRect(0, 0, 1024, 256);
+      // Stone joints beneath weathered paint
+      ctx.strokeStyle = 'rgba(110, 96, 74, 0.35)';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(4, 4, 1016, 124);
+      ctx.strokeRect(4, 128, 1016, 124);
 
-    ctx.strokeStyle = textColor;
-    ctx.lineWidth = 6;
-    ctx.strokeRect(14, 14, 996, 228);
+      ctx.fillStyle = 'rgba(42, 34, 26, 0.78)';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = 'bold 58px Georgia, serif';
+      ctx.fillText(title.toUpperCase(), 512, 98);
 
-    ctx.fillStyle = textColor;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.font = 'bold 60px Georgia, serif';
-    ctx.fillText(title.toUpperCase(), 512, 106);
+      ctx.font = '600 28px Georgia, serif';
+      ctx.fillStyle = 'rgba(72, 54, 38, 0.72)';
+      ctx.fillText(subtitle.toUpperCase(), 512, 174);
 
-    ctx.font = '500 30px Georgia, serif';
-    ctx.fillStyle = '#f1e5c8';
-    ctx.fillText(subtitle, 512, 178);
+      // Natural stone flecking / weathering streaks
+      for (let i = 0; i < 420; i++) {
+        ctx.fillStyle = randSign() > 0.45 ? 'rgba(218, 206, 182, 0.34)' : 'rgba(148, 134, 108, 0.22)';
+        ctx.fillRect(randSign() * 1024, randSign() * 256, 3 + randSign() * 10, 2 + randSign() * 6);
+      }
+    } else if (style === 'roofsign') {
+      // Cast-iron / timber rooftop verandah fascia sign (M. SKINNER / BROWNLEES style)
+      ctx.fillStyle = bgColor || '#1e1c1a';
+      ctx.fillRect(0, 0, 1024, 256);
+      ctx.strokeStyle = '#e7dfd0';
+      ctx.lineWidth = 8;
+      ctx.strokeRect(10, 10, 1004, 236);
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#f4eee0';
+      ctx.font = 'bold 84px Georgia, serif';
+      ctx.fillText(title.toUpperCase(), 512, 104);
+      ctx.font = '600 32px Georgia, serif';
+      ctx.fillStyle = '#d4c3a3';
+      ctx.fillText(subtitle.toUpperCase(), 512, 188);
+    } else {
+      ctx.fillStyle = bgColor;
+      ctx.fillRect(0, 0, 1024, 256);
+
+      // Corner ornaments & double bevel border
+      ctx.strokeStyle = textColor;
+      ctx.lineWidth = 6;
+      ctx.strokeRect(14, 14, 996, 228);
+      ctx.lineWidth = 2;
+      ctx.strokeRect(24, 24, 976, 208);
+
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+
+      // Subtle embossed shadow under gold-leaf serif lettering
+      ctx.fillStyle = 'rgba(10, 8, 6, 0.55)';
+      ctx.font = 'bold 58px Georgia, serif';
+      ctx.fillText(title.toUpperCase(), 515, 109);
+
+      ctx.fillStyle = textColor;
+      ctx.fillText(title.toUpperCase(), 512, 105);
+
+      ctx.font = '500 29px Georgia, serif';
+      ctx.fillStyle = '#f1e5c8';
+      ctx.fillText(subtitle, 512, 178);
+    }
 
     const tex = new THREE.CanvasTexture(sCanvas);
     tex.anisotropy = Math.min(8, maxAnisotropy);
@@ -416,13 +823,148 @@ export function createProceduralTextures(maxAnisotropy: number): TextureBundle {
     return tex;
   };
 
+  // 16. 1914 Poster & Handbill Collage Texture (for civic kiosks & wharf noticeboards)
+  const postCanvas = document.createElement('canvas');
+  postCanvas.width = 512;
+  postCanvas.height = 256;
+  const poCtx = postCanvas.getContext('2d')!;
+  poCtx.fillStyle = '#33281e';
+  poCtx.fillRect(0, 0, 512, 256);
+  const handbills = [
+    { x: 14, y: 14, w: 148, h: 228, bg: '#ead9b7', fg: '#1e1915', accent: '#8e2420', top: 'OPERA HOUSE', mid: 'CONCERT', bot: 'SATURDAY 8 PM' },
+    { x: 176, y: 14, w: 160, h: 110, bg: '#d6e0d5', fg: '#1c2b21', accent: '#234a35', top: 'UNION STEAM', mid: 'COASTAL CARGO', bot: 'SAILS TUESDAYS' },
+    { x: 176, y: 134, w: 160, h: 108, bg: '#f0dfba', fg: '#251a11', accent: '#753f16', top: 'BUSHELLS', mid: 'BLUE LABEL TEA', bot: '1/10 PER LB' },
+    { x: 350, y: 14, w: 148, h: 228, bg: '#e3cbb7', fg: '#1f1814', accent: '#1d3752', top: 'OAMARU', mid: 'MOTOR TRIALS', bot: 'HARBOUR ST' },
+  ];
+  handbills.forEach((hb) => {
+    poCtx.fillStyle = hb.bg;
+    poCtx.fillRect(hb.x, hb.y, hb.w, hb.h);
+    poCtx.strokeStyle = hb.accent;
+    poCtx.lineWidth = 4;
+    poCtx.strokeRect(hb.x + 5, hb.y + 5, hb.w - 10, hb.h - 10);
+    poCtx.textAlign = 'center';
+    poCtx.fillStyle = hb.accent;
+    poCtx.font = 'bold 18px Georgia, serif';
+    poCtx.fillText(hb.top, hb.x + hb.w * 0.5, hb.y + hb.h * 0.28);
+    poCtx.fillStyle = hb.fg;
+    poCtx.font = 'bold 21px Georgia, serif';
+    poCtx.fillText(hb.mid, hb.x + hb.w * 0.5, hb.y + hb.h * 0.56);
+    poCtx.font = '600 13px Georgia, serif';
+    poCtx.fillText(hb.bot, hb.x + hb.w * 0.5, hb.y + hb.h * 0.8);
+  });
+  const posterCollage = configureTexture(postCanvas, 1, 1, maxAnisotropy, true);
+  posterCollage.wrapS = THREE.ClampToEdgeWrapping;
+  posterCollage.wrapT = THREE.ClampToEdgeWrapping;
+  createdTextures.push(posterCollage);
+
+  // 17. Vintage 1914 Advertising Generator (Gable Murals, Projecting Blade Signs & A-Frame Boards)
+  const createVintageAdTexture = (
+    headline: string,
+    subline: string,
+    bgColor: string,
+    fgColor: string,
+    accentColor: string,
+    kind: 'mural' | 'blade' | 'aboard'
+  ): THREE.CanvasTexture => {
+    const adCanvas = document.createElement('canvas');
+    adCanvas.width = kind === 'aboard' ? 384 : 512;
+    adCanvas.height = kind === 'aboard' ? 512 : 320;
+    const ctx = adCanvas.getContext('2d')!;
+    const W = adCanvas.width;
+    const H = adCanvas.height;
+    const randAd = seededNoise(headline.length * 73 + subline.length * 19);
+
+    ctx.fillStyle = bgColor;
+    ctx.fillRect(0, 0, W, H);
+
+    // Ornate double-rule period border
+    ctx.strokeStyle = accentColor;
+    ctx.lineWidth = kind === 'mural' ? 8 : 6;
+    ctx.strokeRect(12, 12, W - 24, H - 24);
+    ctx.strokeStyle = fgColor;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(22, 22, W - 44, H - 44);
+
+    ctx.fillStyle = accentColor;
+    ctx.fillRect(36, kind === 'aboard' ? 82 : 60, W - 72, 4);
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    if (kind === 'aboard') {
+      ctx.fillStyle = accentColor;
+      ctx.font = 'bold 28px Georgia, serif';
+      ctx.fillText('1914 · OAMARU', W * 0.5, 52);
+
+      const words = headline.toUpperCase().split(' ');
+      ctx.fillStyle = fgColor;
+      ctx.font = 'bold 44px Georgia, serif';
+      if (words.length >= 2) {
+        const mid = Math.ceil(words.length / 2);
+        ctx.fillText(words.slice(0, mid).join(' '), W * 0.5, 192);
+        ctx.fillText(words.slice(mid).join(' '), W * 0.5, 256);
+      } else {
+        ctx.fillText(headline.toUpperCase(), W * 0.5, 224);
+      }
+
+      ctx.fillStyle = accentColor;
+      ctx.fillRect(58, 336, W - 116, 4);
+
+      ctx.fillStyle = fgColor;
+      ctx.font = '600 26px Georgia, serif';
+      ctx.fillText(subline, W * 0.5, 398);
+    } else if (kind === 'blade') {
+      ctx.fillStyle = fgColor;
+      ctx.font = 'bold 54px Georgia, serif';
+      ctx.fillText(headline.toUpperCase(), W * 0.5, H * 0.42);
+      ctx.fillStyle = accentColor;
+      ctx.font = '600 26px Georgia, serif';
+      ctx.fillText(subline.toUpperCase(), W * 0.5, H * 0.7);
+    } else {
+      ctx.fillStyle = accentColor;
+      ctx.font = '600 24px Georgia, serif';
+      ctx.fillText('ESTABLISHED & WARRANTED', W * 0.5, 42);
+
+      ctx.fillStyle = fgColor;
+      ctx.font = 'bold 50px Georgia, serif';
+      ctx.fillText(headline.toUpperCase(), W * 0.5, H * 0.45);
+
+      ctx.fillStyle = accentColor;
+      ctx.fillRect(52, H * 0.63, W - 104, 4);
+
+      ctx.fillStyle = fgColor;
+      ctx.font = '600 28px Georgia, serif';
+      ctx.fillText(subline.toUpperCase(), W * 0.5, H * 0.77);
+
+      for (let i = 0; i < 360; i++) {
+        ctx.fillStyle = randAd() > 0.5 ? 'rgba(218, 206, 182, 0.16)' : 'rgba(56, 46, 36, 0.14)';
+        ctx.fillRect(randAd() * W, randAd() * H, 3 + randAd() * 9, 2 + randAd() * 5);
+      }
+    }
+
+    const tex = new THREE.CanvasTexture(adCanvas);
+    tex.anisotropy = Math.min(8, maxAnisotropy);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.needsUpdate = true;
+    createdTextures.push(tex);
+    return tex;
+  };
+
   return {
     limestone,
+    limestoneBump,
     limestoneRusticated,
+    limestoneRusticatedBump,
     polychromeStone,
     archedWindow,
+    openSashWindow,
+    shopfrontWindow,
     castIronLace,
+    balustradeStone,
+    stripedAwning,
+    footpathStone,
     timberDoors,
+    posterCollage,
     cobbles,
     cobblesBump,
     macadam,
@@ -430,7 +972,10 @@ export function createProceduralTextures(maxAnisotropy: number): TextureBundle {
     wharfTimber,
     corrugatedIron,
     grass,
+    radiatorHoneycomb,
+    clockFace,
     createSignTexture,
+    createVintageAdTexture,
     dispose: () => {
       createdTextures.forEach((t) => t.dispose());
     },

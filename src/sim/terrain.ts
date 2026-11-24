@@ -11,18 +11,35 @@ export interface CircuitCheckpoint {
 export const CIRCUIT_LOOP_POINTS: readonly [number, number][] = [
   [-104, 0], // Turn 6 exit onto Harbour St
   [95, 0], // Turn 1 onto Quay Esplanade
-  [95, 118], // Turn 2 onto Wanbrow Ridge
-  [-152, 118], // Turn 3 onto Severn St
-  [-152, -68], // Turn 4 onto Itchen St
-  [-104, -68], // Turn 5 onto Thames St
+  [95, 196], // Turn 2: Cape Wanbrow Coastal Climb Summit
+  [-152, 196], // Turn 3: Lighthouse Summit Ridge West
+  [-152, -148], // Turn 4: Severn St North Past Overbridge
+  [-104, -148], // Turn 5: Thames North Civic Loop
 ];
 
 export const CIRCUIT_CHECKPOINTS: CircuitCheckpoint[] = [
   { index: 0, label: 'Start / Finish (Harbour St)', x: -56, z: 0, radius: 11 },
-  { index: 1, label: 'Sector 1 (Quay & Wanbrow)', x: 95, z: 58, radius: 13 },
-  { index: 2, label: 'Sector 2 (Wanbrow Ridge)', x: -24, z: 118, radius: 13 },
-  { index: 3, label: 'Sector 3 (Severn & Thames)', x: -128, z: -68, radius: 14 },
+  { index: 1, label: 'Sector 1 (Cape Wanbrow Climb)', x: 95, z: 152, radius: 14 },
+  { index: 2, label: 'Sector 2 (Lighthouse Summit Ridge)', x: -28, z: 196, radius: 14 },
+  { index: 3, label: 'Sector 3 (Thames North Speed Trap)', x: -128, z: -148, radius: 14 },
 ];
+
+export const RADIATOR_STANDPIPE = {
+  x: -41.5,
+  z: -7.9,
+  interactionX: -41.5,
+  interactionZ: -5.8,
+  radius: 7.5,
+};
+
+export const SPEED_TRAP_ZONE = {
+  x: -104,
+  z: -106,
+  constableX: -96.2,
+  constableZ: -106,
+  radius: 15,
+  limitMph: 22,
+};
 
 export interface SideStreetBlockade {
   id: string;
@@ -42,12 +59,13 @@ export const SIDE_STREET_BLOCKADES: SideStreetBlockade[] = [
   { id: 'tyne-wansbeck', x: -24, z: 107, yaw: 0, width: 12, hasCart: true, spectatorCount: 2 },
   { id: 'thames-wansbeck', x: -104, z: 107, yaw: 0, width: 13, hasCart: true, spectatorCount: 3 },
   { id: 'thames-south', x: -104, z: 11.5, yaw: Math.PI, width: 13, hasCart: true, spectatorCount: 4 },
-  { id: 'thames-north', x: -104, z: -78, yaw: 0, width: 13, hasCart: true, spectatorCount: 3 },
   { id: 'itchen-east', x: -91.5, z: -68, yaw: Math.PI / 2, width: 12, hasCart: true, spectatorCount: 3 },
   { id: 'harbour-west', x: -114, z: 0, yaw: -Math.PI / 2, width: 12, hasCart: true, spectatorCount: 3 },
-  { id: 'wanbrow-upper', x: 95, z: 128, yaw: Math.PI, width: 12, hasCart: true, spectatorCount: 2 },
-  { id: 'severn-north', x: -152, z: -78, yaw: 0, width: 13, hasCart: true, spectatorCount: 2 },
   { id: 'wansbeck-west', x: -162, z: 118, yaw: -Math.PI / 2, width: 12, hasCart: true, spectatorCount: 2 },
+  { id: 'quay-summit-end', x: 95, z: 206, yaw: Math.PI, width: 12, hasCart: true, spectatorCount: 3 },
+  { id: 'severn-summit-end', x: -152, z: 206, yaw: Math.PI, width: 13, hasCart: true, spectatorCount: 3 },
+  { id: 'thames-north-end', x: -104, z: -158, yaw: 0, width: 13, hasCart: true, spectatorCount: 3 },
+  { id: 'severn-north-end', x: -152, z: -158, yaw: 0, width: 13, hasCart: true, spectatorCount: 3 },
 ];
 
 export const OAMARU_LANDMARKS: Landmark[] = [
@@ -78,23 +96,31 @@ export const OAMARU_LANDMARKS: Landmark[] = [
   {
     id: 'harbour-board',
     name: 'Oamaru Harbour Board',
-    subtitle: 'East Quay Cobblestone Hairpin',
+    subtitle: 'East Quay Cobblestone Hairpin & Breakwater',
     x: 82,
     z: -4,
     radius: 20,
   },
   {
     id: 'wanbrow-grade',
-    name: 'Cape Wanbrow Climb',
-    subtitle: 'Coastal Ridge Straight · 8% Grade',
+    name: 'Cape Wanbrow Hill Climb',
+    subtitle: 'Coastal Headland Ascent · 12% Grade',
     x: 95,
-    z: 88,
-    radius: 30,
+    z: 150,
+    radius: 34,
+  },
+  {
+    id: 'wanbrow-lighthouse',
+    name: 'Cape Wanbrow Lighthouse & Signal',
+    subtitle: '1914 Maritime Beacon & Summit Ridge',
+    x: 20,
+    z: 196,
+    radius: 40,
   },
   {
     id: 'wansbeck-ridge',
     name: 'Wanbrow Coastal Terrace',
-    subtitle: 'Panoramic Otago Ridge Straight',
+    subtitle: 'Panoramic Otago Cut-Through Straight',
     x: -24,
     z: 118,
     radius: 34,
@@ -114,6 +140,14 @@ export const OAMARU_LANDMARKS: Landmark[] = [
     x: -104,
     z: -48,
     radius: 22,
+  },
+  {
+    id: 'thames-overbridge',
+    name: 'Thames North Railway Overbridge',
+    subtitle: 'Waitaki Flour Mill & Constable Speed Trap',
+    x: -104,
+    z: -120,
+    radius: 28,
   },
 ];
 
@@ -157,6 +191,10 @@ export const ROAD_POTHOLES: RoadPothole[] = [
   { id: 'ph-severn-2', x: -153.6, z: 10, radius: 1.2, depth: 0.16 },
   { id: 'ph-itchen-1', x: -128, z: -69.4, radius: 1.05, depth: 0.14 },
   { id: 'ph-thames-1', x: -105.8, z: -34, radius: 1.1, depth: 0.15 },
+  { id: 'ph-quay-climb', x: 96.2, z: 158, radius: 1.2, depth: 0.15 },
+  { id: 'ph-summit-1', x: 18, z: 197.4, radius: 1.25, depth: 0.16 },
+  { id: 'ph-severn-south', x: -153.5, z: 162, radius: 1.2, depth: 0.15 },
+  { id: 'ph-thames-north', x: -102.2, z: -132, radius: 1.1, depth: 0.14 },
 ];
 
 export const ROAD_OBSTRUCTIONS: RoadObstruction[] = [
@@ -169,6 +207,9 @@ export const ROAD_OBSTRUCTIONS: RoadObstruction[] = [
   { id: 'obs-branch-severn', x: -156.5, z: 46, radius: 0.88, yaw: 0.32, kind: 'branch' },
   { id: 'obs-crate-itchen', x: -134, z: -63.8, radius: 0.68, yaw: -0.4, kind: 'crate' },
   { id: 'obs-sawhorse-thames', x: -104.0, z: -16, radius: 0.85, yaw: 0.15, kind: 'sawhorse' },
+  { id: 'obs-churns-summit', x: -42, z: 200.4, radius: 0.65, yaw: 0.2, kind: 'milk-churns' },
+  { id: 'obs-branch-summit', x: 64, z: 192.2, radius: 0.88, yaw: -0.3, kind: 'branch' },
+  { id: 'obs-crate-northloop', x: -130, z: -143.5, radius: 0.68, yaw: 0.5, kind: 'crate' },
 ];
 
 export const WORLD_COLLIDERS: ColliderBox[] = [
@@ -179,10 +220,18 @@ export const WORLD_COLLIDERS: ColliderBox[] = [
   { minX: -12, maxX: 84, minZ: 11, maxZ: 106, label: 'Harbour St South Block' },
   { minX: -142, maxX: -114, minZ: -58, maxZ: 106, label: 'Thames–Severn Civic Block' },
 
-  // Outer perimeter Victorian building terraces
+  // Outer perimeter Victorian building terraces & Extended Circuit Compounds
   { minX: -94, maxX: -36, minZ: -102, maxZ: -77, label: 'Itchen North-West Terrace' },
   { minX: -12, maxX: 84, minZ: -102, maxZ: -77, label: 'Itchen North-East Terrace' },
   { minX: -186, maxX: -161, minZ: -58, maxZ: 96, label: 'Severn St West Terrace' },
+  { minX: -92, maxX: -62, minZ: -136, maxZ: -112, label: 'Waitaki Flour & Woollen Mill' },
+  { minX: -142, maxX: -114, minZ: -132, maxZ: -116, label: 'Thames-Severn Overbridge Pier' },
+  { minX: -168, maxX: -160, minZ: -132, maxZ: -116, label: 'Severn Overbridge West Abutment' },
+  { minX: 28, maxX: 56, minZ: 162, maxZ: 186, label: 'Cape Wanbrow Lighthouse Compound' },
+
+  // Harbour Seawall Edge Colliders (keep Sumpter Wharf |z| <= 7.2 open, guard cliff drop-offs)
+  { minX: 102.5, maxX: 111, minZ: -170, maxZ: -9, label: 'North Harbour Seawall' },
+  { minX: 102.5, maxX: 111, minZ: 9, maxZ: 220, label: 'South Harbour Seawall' },
 
   // Natural Side-Street Blockade Colliders (carts, barrels, barriers & spectators)
   { minX: 103, maxX: 111, minZ: -9, maxZ: 9, label: 'Sumpter Wharf Barricade' },
@@ -192,12 +241,13 @@ export const WORLD_COLLIDERS: ColliderBox[] = [
   { minX: -32, maxX: -16, minZ: 104, maxZ: 111, label: 'Tyne Wansbeck Barrier' },
   { minX: -112, maxX: -96, minZ: 104, maxZ: 111, label: 'Thames Wansbeck Barrier' },
   { minX: -112, maxX: -96, minZ: 9, maxZ: 16, label: 'Thames South Barrier' },
-  { minX: -112, maxX: -96, minZ: -83, maxZ: -75, label: 'Thames North Barrier' },
   { minX: -96, maxX: -88, minZ: -76, maxZ: -60, label: 'Itchen East Carts' },
   { minX: -119, maxX: -112, minZ: -9, maxZ: 9, label: 'Harbour West Carts' },
-  { minX: 87, maxX: 103, minZ: 126, maxZ: 135, label: 'Cape Wanbrow Upper Barrier' },
-  { minX: -161, maxX: -143, minZ: -83, maxZ: -75, label: 'Severn North Barrier' },
   { minX: -168, maxX: -159, minZ: 110, maxZ: 126, label: 'Wansbeck West Barrier' },
+  { minX: 87, maxX: 103, minZ: 204, maxZ: 213, label: 'Quay Summit End Barrier' },
+  { minX: -161, maxX: -143, minZ: 204, maxZ: 213, label: 'Severn Summit End Barrier' },
+  { minX: -112, maxX: -96, minZ: -166, maxZ: -156, label: 'Thames North End Barrier' },
+  { minX: -161, maxX: -143, minZ: -166, maxZ: -156, label: 'Severn North End Barrier' },
 ];
 
 function smoothstep(edge0: number, edge1: number, x: number): number {
@@ -264,24 +314,31 @@ export function getTerrainHeightAndSurface(
     baseHeight += smoothstep(-128, -195, x) * 2.2;
   }
 
-  // Cape Wanbrow headland climb south of z = 60 along Quay & Wanbrow Ridge (z = 118)
+  // Cape Wanbrow headland climb south of z = 60 -> Summit Ridge at z = 196 (10-13% climb grade)
   if (z > 60) {
     const hillT = smoothstep(60, 125, z);
     const eastRidge = smoothstep(-140, 102, x);
     baseHeight += hillT * (1.8 + eastRidge * 3.8);
   }
+  if (z > 122) {
+    const summitT = smoothstep(122, 198, z);
+    const eastSummitBias = 0.52 + 0.48 * smoothstep(-160, 102, x);
+    baseHeight += summitT * 6.4 * eastSummitBias;
+  }
 
-  if (z < -100) {
-    baseHeight += smoothstep(-100, -200, z) * 6.5;
+  if (z < -160) {
+    baseHeight += smoothstep(-160, -230, z) * 5.2;
   }
 
   const onHarbourSt = Math.abs(z) <= 7.2 && x >= -112 && x <= 104;
   const onTyneSt = Math.abs(x - -24) <= 6.8 && z >= -95 && z <= 122;
   const onItchenSt = Math.abs(z - -68) <= 6.8 && x >= -159 && x <= 102;
-  const onQuayRoad = Math.abs(x - 95) <= 6.8 && z >= -95 && z <= 135;
-  const onThamesSt = Math.abs(x - -104) <= 7.5 && z >= -105 && z <= 125;
-  const onSevernSt = Math.abs(x - -152) <= 7.2 && z >= -80 && z <= 125;
+  const onQuayRoad = Math.abs(x - 95) <= 6.8 && z >= -95 && z <= 204;
+  const onThamesSt = Math.abs(x - -104) <= 7.5 && z >= -156 && z <= 125;
+  const onSevernSt = Math.abs(x - -152) <= 7.2 && z >= -156 && z <= 204;
   const onWansbeckRidge = Math.abs(z - 118) <= 7.2 && x >= -160 && x <= 102;
+  const onWanbrowSummit = Math.abs(z - 196) <= 7.2 && x >= -160 && x <= 102;
+  const onNorthCivicLoop = Math.abs(z - -148) <= 7.2 && x >= -160 && x <= -96.5;
   const onRailMudSiding = z >= -61.5 && z <= -45 && x >= 12 && x <= 86;
 
   if (onRailMudSiding) {
@@ -317,7 +374,9 @@ export function getTerrainHeightAndSurface(
     onQuayRoad ||
     onThamesSt ||
     onSevernSt ||
-    onWansbeckRidge
+    onWansbeckRidge ||
+    onWanbrowSummit ||
+    onNorthCivicLoop
   ) {
     const gravelMicro = Math.sin(x * 2.1 + z * 1.7) * 0.008;
     const hole = skipPotholes ? { dip: 0, bumpBoost: 0, rutBias: 0 } : samplePotholeAt(x, z);
