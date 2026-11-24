@@ -14,6 +14,47 @@ import {
 } from './characterModels';
 import { SurfaceType } from './types';
 
+/**
+ * Two-bone limb in the YZ plane. rotation.x = 0 hangs the bone on local −Y.
+ * A negative rotation.x swings that bone toward +Z (the bicycle's forward).
+ * poleUp holds the mid joint above the root-to-target line, which is a knee;
+ * false holds it below, which is an elbow.
+ */
+export function poseSagittalLimb(
+  root: THREE.Object3D,
+  mid: THREE.Object3D,
+  originY: number,
+  originZ: number,
+  targetY: number,
+  targetZ: number,
+  len1: number,
+  len2: number,
+  poleUp: boolean,
+): void {
+  const dy = targetY - originY;
+  const dz = targetZ - originZ;
+  const raw = Math.hypot(dy, dz);
+  const maxReach = len1 + len2 - 0.012;
+  const minReach = Math.abs(len1 - len2) + 0.012;
+  const dist = Math.min(maxReach, Math.max(minReach, raw || minReach));
+  const inv = raw > 1e-5 ? 1 / raw : 1;
+  const dirY = raw > 1e-5 ? dy * inv : -1;
+  const dirZ = raw > 1e-5 ? dz * inv : 0;
+  const adj = (len1 * len1 + dist * dist - len2 * len2) / (2 * dist);
+  const bend = Math.sqrt(Math.max(0, len1 * len1 - adj * adj));
+  const pole = poleUp ? 1 : -1;
+  const jointY = dirY * adj + pole * dirZ * bend;
+  const jointZ = dirZ * adj - pole * dirY * bend;
+  root.rotation.set(Math.atan2(-jointZ, -jointY), 0, 0);
+  const sy = dirY * dist - jointY;
+  const sz = dirZ * dist - jointZ;
+  const c = Math.cos(root.rotation.x);
+  const s = Math.sin(root.rotation.x);
+  const localY = sy * c + sz * s;
+  const localZ = -sy * s + sz * c;
+  mid.rotation.set(Math.atan2(-localZ, -localY), 0, 0);
+}
+
 export interface DynamicObstacle {
   x: number;
   z: number;
@@ -94,6 +135,7 @@ interface WalkingPedestrian {
   progress: number;
   dir: 1 | -1;
   evadeTimer: number;
+  gait?: 'unsteady';
 }
 
 interface IdleAnimal {
@@ -178,6 +220,8 @@ interface MovingHorseDray {
 interface MovingCyclist {
   group: THREE.Group;
   wheels: THREE.Object3D[];
+  crank: THREE.Object3D;
+  pedals: [THREE.Object3D, THREE.Object3D];
   leftLeg: THREE.Object3D;
   rightLeg: THREE.Object3D;
   leftKnee: THREE.Object3D;
@@ -197,6 +241,61 @@ interface Seagull {
   baseY: number;
   orbitR: number;
   speed: number;
+  phase: number;
+}
+
+interface StreetCat {
+  group: THREE.Group;
+  tail: THREE.Object3D;
+  homeX: number;
+  homeZ: number;
+  x: number;
+  z: number;
+  yaw: number;
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+  sit: boolean;
+  flee: number;
+  phase: number;
+}
+
+interface StreetGoose {
+  group: THREE.Group;
+  leftWing: THREE.Object3D;
+  rightWing: THREE.Object3D;
+  neck: THREE.Object3D;
+  x: number;
+  z: number;
+  yaw: number;
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+  flee: number;
+  phase: number;
+}
+
+interface BeatConstable {
+  group: THREE.Group;
+  leftLeg: THREE.Object3D;
+  rightLeg: THREE.Object3D;
+  leftKnee: THREE.Object3D;
+  rightKnee: THREE.Object3D;
+  leftArm: THREE.Object3D;
+  rightArm: THREE.Object3D;
+  leftElbow: THREE.Object3D;
+  rightElbow: THREE.Object3D;
+  head: THREE.Object3D;
+  homeX: number;
+  homeZ: number;
+  x: number;
+  z: number;
+  yaw: number;
+  speed: number;
+  chasing: boolean;
+  chaseLeft: number;
   phase: number;
 }
 
@@ -277,6 +376,34 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
   const group = new THREE.Group();
   const charPool = track(createCharacterPool());
 
+  const footCanvas = document.createElement('canvas');
+  footCanvas.width = 64;
+  footCanvas.height = 64;
+  const footCtx = footCanvas.getContext('2d')!;
+  const footGrad = footCtx.createRadialGradient(32, 32, 4, 32, 32, 30);
+  footGrad.addColorStop(0, 'rgba(28, 24, 18, 0.55)');
+  footGrad.addColorStop(1, 'rgba(28, 24, 18, 0)');
+  footCtx.fillStyle = footGrad;
+  footCtx.fillRect(0, 0, 64, 64);
+  const footTex = track(new THREE.CanvasTexture(footCanvas));
+  footTex.colorSpace = THREE.SRGBColorSpace;
+  const footMat = track(
+    new THREE.MeshBasicMaterial({
+      map: footTex,
+      transparent: true,
+      depthWrite: false,
+      toneMapped: false,
+    })
+  );
+  const footGeo = track(new THREE.CircleGeometry(0.42, 14));
+  footGeo.rotateX(-Math.PI / 2);
+  const addFootDisc = (parent: THREE.Object3D) => {
+    const disc = new THREE.Mesh(footGeo, footMat);
+    disc.position.y = 0.03;
+    disc.renderOrder = 2;
+    parent.add(disc);
+  };
+
   // Period Vehicle, Cart & Bird Materials
   const brassMat = track(new THREE.MeshStandardMaterial({ color: 0xd4aa4f, roughness: 0.28, metalness: 0.88 }));
   const timberCartMat = track(new THREE.MeshStandardMaterial({ color: 0x6c4c2f, roughness: 0.82 }));
@@ -306,6 +433,9 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
   const movingDrays: MovingHorseDray[] = [];
   const movingCyclists: MovingCyclist[] = [];
   const obstacles: DynamicObstacle[] = [];
+  const streetCats: StreetCat[] = [];
+  const streetGeese: StreetGoose[] = [];
+  const beatConstables: BeatConstable[] = [];
   let latestDogBarkIntensity = 0;
   let latestDogX = 0;
   let latestDogZ = 0;
@@ -318,7 +448,10 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
   // ---------------------------------------------------------------------------
   // Articulated Edwardian Citizen Wrapper
   // ---------------------------------------------------------------------------
-  type CitizenStyle = Extract<HumanPreset, 'gentleman' | 'lady' | 'worker' | 'constable' | 'newsboy'>;
+  type CitizenStyle = Extract<
+    HumanPreset,
+    'gentleman' | 'lady' | 'worker' | 'constable' | 'newsboy' | 'farmer' | 'schoolboy' | 'mechanic' | 'captain'
+  >;
 
   const createPedestrian = (style: CitizenStyle, variantIdx: number): ArticulatedHumanRig => {
     return charPool.buildHuman(style, variantIdx);
@@ -327,7 +460,7 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
   // ---------------------------------------------------------------------------
   // Articulated Parked / Moving Dray
   // ---------------------------------------------------------------------------
-  const createParkedDray = (coatHex: number) => {
+  const createParkedDray = (coatHex: number, cargo: 'grain' | 'milk' | 'bread' = 'grain') => {
     const root = new THREE.Group();
     const horseRig = charPool.buildHorse(coatHex, true);
     horseRig.group.position.set(0, 0, 1.72);
@@ -345,12 +478,42 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
     bed.castShadow = true;
     root.add(bed);
 
-    for (let s = 0; s < 5; s++) {
-      const sack = new THREE.Mesh(track(new THREE.BoxGeometry(0.62, 0.36, 0.85)), burlapMat);
-      sack.position.set(s % 2 === 0 ? -0.34 : 0.34, s === 4 ? 1.62 : 1.32, s < 2 ? -0.45 : s < 4 ? -1.32 : -0.9);
-      sack.rotation.y = (s - 1.5) * 0.09;
-      sack.castShadow = true;
-      root.add(sack);
+    if (cargo === 'milk') {
+      const churnMat = track(new THREE.MeshStandardMaterial({ color: 0xc5ccd1, roughness: 0.32, metalness: 0.62 }));
+      const churnGeo = track(new THREE.CylinderGeometry(0.2, 0.22, 0.58, 10));
+      const lidGeo = track(new THREE.CylinderGeometry(0.1, 0.16, 0.1, 8));
+      const spots: [number, number][] = [[-0.38, -0.4], [0.38, -0.4], [-0.38, -1.25], [0.38, -1.25], [0, -0.82]];
+      spots.forEach(([sx, sz]) => {
+        const churn = new THREE.Mesh(churnGeo, churnMat);
+        churn.position.set(sx, 1.48, sz);
+        churn.castShadow = true;
+        const lid = new THREE.Mesh(lidGeo, churnMat);
+        lid.position.set(sx, 1.82, sz);
+        root.add(churn, lid);
+      });
+    } else if (cargo === 'bread') {
+      const crateMat = track(new THREE.MeshStandardMaterial({ color: 0x8a6840, roughness: 0.86 }));
+      const loafMat = track(new THREE.MeshStandardMaterial({ color: 0xc4a36a, roughness: 0.9 }));
+      for (let s = 0; s < 4; s++) {
+        const crate = new THREE.Mesh(track(new THREE.BoxGeometry(0.62, 0.28, 0.48)), crateMat);
+        crate.position.set(s % 2 === 0 ? -0.34 : 0.34, 1.32, s < 2 ? -0.5 : -1.25);
+        crate.castShadow = true;
+        root.add(crate);
+        for (let loaf = 0; loaf < 2; loaf++) {
+          const roll = new THREE.Mesh(track(new THREE.SphereGeometry(0.09, 8, 6)), loafMat);
+          roll.scale.set(1.3, 0.7, 0.9);
+          roll.position.set((s % 2 === 0 ? -0.34 : 0.34) + (loaf === 0 ? -0.12 : 0.12), 1.52, s < 2 ? -0.5 : -1.25);
+          root.add(roll);
+        }
+      }
+    } else {
+      for (let s = 0; s < 5; s++) {
+        const sack = new THREE.Mesh(track(new THREE.BoxGeometry(0.62, 0.36, 0.85)), burlapMat);
+        sack.position.set(s % 2 === 0 ? -0.34 : 0.34, s === 4 ? 1.62 : 1.32, s < 2 ? -0.45 : s < 4 ? -1.32 : -0.9);
+        sack.rotation.y = (s - 1.5) * 0.09;
+        sack.castShadow = true;
+        root.add(sack);
+      }
     }
 
     const rimGeo = track(new THREE.TorusGeometry(0.56, 0.05, 8, 22));
@@ -583,6 +746,7 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
       const px = -4.3 + (s / Math.max(1, totalSpecs - 1)) * 8.6;
       const pz = s % 2 === 0 ? -0.65 : -1.25;
       ped.group.position.set(px, 0, pz);
+      addFootDisc(ped.group);
       if (s % 3 === 1) {
         ped.group.rotation.y = 0.45; // conversing slightly sideways with neighbor
       }
@@ -875,6 +1039,7 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
       const ped = createPedestrian(m.style, ci * 7 + mi);
       ped.group.position.set(wx, wy, wz);
       ped.group.rotation.y = m.yaw;
+      addFootDisc(ped.group);
       group.add(ped.group);
       spectators.push({
         group: ped.group,
@@ -889,7 +1054,15 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
   });
 
   // Walking Pedestrians strolling along safe stone footpaths (bustling Saturday market traffic)
-  const sidewalkWalkRoutes: { x1: number; z1: number; x2: number; z2: number; style: CitizenStyle; speed: number }[] = [
+  const sidewalkWalkRoutes: {
+    x1: number;
+    z1: number;
+    x2: number;
+    z2: number;
+    style: CitizenStyle;
+    speed: number;
+    gait?: 'unsteady';
+  }[] = [
     { x1: -72, z1: -9.4, x2: -12, z2: -9.4, style: 'gentleman', speed: 1.35 },
     { x1: -64, z1: -10.4, x2: 18, z2: -10.4, style: 'lady', speed: 1.12 },
     { x1: -8, z1: 9.4, x2: 65, z2: 9.4, style: 'lady', speed: 1.15 },
@@ -912,10 +1085,21 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
     { x1: -34, z1: -9.8, x2: 46, z2: -9.8, style: 'newsboy', speed: 1.6 },
     { x1: -112.8, z1: -136, x2: -112.8, z2: -82, style: 'worker', speed: 1.32 },
     { x1: -10, z1: 187.5, x2: 76, z2: 187.5, style: 'gentleman', speed: 1.26 },
+    // Criterion Hotel front. Unsteady patrons, not a caricature: the gait is the whole joke.
+    { x1: -78, z1: 10.48, x2: -42, z2: 10.48, style: 'gentleman', speed: 0.42, gait: 'unsteady' },
+    { x1: -66, z1: 10.02, x2: -46, z2: 10.02, style: 'worker', speed: 0.36, gait: 'unsteady' },
+    { x1: -86, z1: 9.55, x2: -40, z2: 9.55, style: 'schoolboy', speed: 1.7 },
+    { x1: 18, z1: 9.62, x2: 74, z2: 9.62, style: 'farmer', speed: 1.1 },
+    { x1: -90, z1: -9.62, x2: -40, z2: -9.62, style: 'mechanic', speed: 1.24 },
+    { x1: 46, z1: -10.15, x2: 76, z2: -10.15, style: 'lady', speed: 1.06 },
+    { x1: 86.35, z1: 18, x2: 86.35, z2: 90, style: 'captain', speed: 1.02 },
+    { x1: -143.45, z1: 14, x2: -143.45, z2: 78, style: 'schoolboy', speed: 1.55 },
+    { x1: -95.55, z1: 22, x2: -95.55, z2: 88, style: 'mechanic', speed: 1.16 },
   ];
 
   sidewalkWalkRoutes.forEach((rt, wi) => {
     const ped = createPedestrian(rt.style, wi + 2);
+    addFootDisc(ped.group);
     group.add(ped.group);
     walkers.push({
       group: ped.group,
@@ -936,6 +1120,7 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
       progress: (wi * 0.23) % 1,
       dir: wi % 2 === 0 ? 1 : -1,
       evadeTimer: 0,
+      gait: rt.gait,
     });
   });
 
@@ -1055,10 +1240,23 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
     });
   });
 
-  // Moving Horse-Drawn Grain Dray trotting calmly along outer kerbside of circuit
-  {
-    const dray = createParkedDray(bayHorseHex);
-    const drayDriver = charPool.buildHuman('worker', 9, { seated: true });
+  // Moving horse drays: grain, the morning milk, and the bakery round.
+  const movingDraySpecs: {
+    coat: number;
+    cargo: 'grain' | 'milk' | 'bread';
+    progress: number;
+    speedMps: number;
+    laneOffset: number;
+    driver: HumanPreset;
+    driverVariant: number;
+  }[] = [
+    { coat: bayHorseHex, cargo: 'grain', progress: 680, speedMps: 3.1, laneOffset: -2.9, driver: 'worker', driverVariant: 9 },
+    { coat: chestnutHorseHex, cargo: 'milk', progress: 90, speedMps: 2.45, laneOffset: 5.35, driver: 'worker', driverVariant: 4 },
+    { coat: dappleGreyHex, cargo: 'bread', progress: 128, speedMps: 2.7, laneOffset: -5.4, driver: 'farmer', driverVariant: 2 },
+  ];
+  movingDraySpecs.forEach((spec) => {
+    const dray = createParkedDray(spec.coat, spec.cargo);
+    const drayDriver = charPool.buildHuman(spec.driver, spec.driverVariant, { seated: true });
     drayDriver.group.scale.setScalar(0.86);
     drayDriver.group.position.set(0, 1.18, -0.15);
     drayDriver.leftArm.rotation.x = -0.52;
@@ -1066,8 +1264,7 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
     drayDriver.leftElbow.rotation.x = -0.68;
     drayDriver.rightElbow.rotation.x = -0.68;
     dray.root.add(drayDriver.group);
-    const startProg = 680;
-    const pos = sampleCircuitLoop(startProg, -2.9);
+    const pos = sampleCircuitLoop(spec.progress, spec.laneOffset);
     dray.root.position.set(pos.x, getTerrainHeightAndSurface(pos.x, pos.z).height, pos.z);
     dray.root.rotation.y = pos.yaw;
     group.add(dray.root);
@@ -1078,14 +1275,14 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
       cartWheels: dray.cartWheels,
       head: dray.headPivot,
       tail: dray.tailPivot,
-      progress: startProg,
-      speedMps: 3.1,
-      laneOffset: -2.9,
+      progress: spec.progress,
+      speedMps: spec.speedMps,
+      laneOffset: spec.laneOffset,
       x: pos.x,
       z: pos.z,
     });
     obstacles.push({ x: pos.x, z: pos.z, radius: 1.75 });
-  }
+  });
 
   // ---------------------------------------------------------------------------
   // 4. Period Automobiles: Parked Kerbside & Cruising Circuit Rivals
@@ -1130,21 +1327,47 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
     obstacles.push({ x: pos.x, z: pos.z, radius: 1.55 });
   });
 
-  // Animated 1914 Edwardian Safety Bicycles cruising kerbside lanes
+  // Animated 1914 Edwardian safety bicycles. The frame is +z forward,
+  // the same yaw sampleCircuitLoop gives the cars (atan2(dx, dz)).
   const cyclistSpecs: { startProgress: number; speedMps: number; laneOffset: number; style: CitizenStyle }[] = [
     { startProgress: 210, speedMps: 4.3, laneOffset: 4.1, style: 'gentleman' },
     { startProgress: 840, speedMps: 3.9, laneOffset: -4.1, style: 'worker' },
   ];
+  const BIKE_WHEEL_Y = 0.34;
+  const BIKE_REAR_Z = -0.52;
+  const BIKE_FRONT_Z = 0.64;
+  const BIKE_BB_Y = 0.42;
+  const BIKE_BB_Z = 0.02;
+  const BIKE_SADDLE_Y = 0.9;
+  const BIKE_SADDLE_Z = -0.24;
+  const BIKE_BAR_Y = 1.06;
+  const BIKE_BAR_Z = 0.1;
+  const BIKE_PEDAL_R = 0.15;
+  const RIDER_SCALE = 0.92;
+  // Seated rig: hip joint is local (x, 0.09, 0.04), shoulders local y 0.49.
+  const RIDER_HIP_Y = 0.09;
+  const RIDER_HIP_Z = 0.04;
+  const RIDER_Y = BIKE_SADDLE_Y - RIDER_HIP_Y * RIDER_SCALE;
+  const RIDER_Z = BIKE_SADDLE_Z - RIDER_HIP_Z * RIDER_SCALE;
+  const riderLocalY = (y: number) => (y - RIDER_Y) / RIDER_SCALE;
+  const riderLocalZ = (z: number) => (z - RIDER_Z) / RIDER_SCALE;
   const bikeTireGeo = track(new THREE.TorusGeometry(0.32, 0.024, 6, 16));
   bikeTireGeo.rotateY(Math.PI / 2);
   const bikeSpokeGeo = track(new THREE.CylinderGeometry(0.008, 0.008, 0.62, 5));
-  const bikeTubeGeo = track(new THREE.CylinderGeometry(0.015, 0.015, 0.56, 6));
+  const chainringGeo = track(new THREE.TorusGeometry(0.09, 0.008, 6, 14));
+  chainringGeo.rotateY(Math.PI / 2);
+  const cogGeo = track(new THREE.TorusGeometry(0.04, 0.007, 5, 10));
+  cogGeo.rotateY(Math.PI / 2);
+  const pedalGeo = track(new THREE.BoxGeometry(0.09, 0.018, 0.042));
+  const saddleGeo = track(new THREE.BoxGeometry(0.14, 0.05, 0.22));
+  const barGeo = track(new THREE.BoxGeometry(0.46, 0.025, 0.025));
   cyclistSpecs.forEach((cs, idx) => {
     const cRoot = new THREE.Group();
+    cRoot.name = 'edwardian-bicycle';
     const wheels: THREE.Object3D[] = [];
-    [0.52, -0.52].forEach((wz) => {
+    [BIKE_FRONT_Z, BIKE_REAR_Z].forEach((wz) => {
       const wg = new THREE.Group();
-      wg.position.set(0, 0.34, wz);
+      wg.position.set(0, BIKE_WHEEL_Y, wz);
       const tire = new THREE.Mesh(bikeTireGeo, rubberTyreMat);
       wg.add(tire);
       for (let s = 0; s < 3; s++) {
@@ -1155,28 +1378,57 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
       cRoot.add(wg);
       wheels.push(wg);
     });
-    const topBar = new THREE.Mesh(bikeTubeGeo, ironWheelMat);
-    topBar.rotation.x = Math.PI / 2;
-    topBar.position.set(0, 0.76, 0.14);
-    const downTube = new THREE.Mesh(bikeTubeGeo, ironWheelMat);
-    downTube.rotation.x = 0.72;
-    downTube.position.set(0, 0.55, 0.14);
-    const seatPost = new THREE.Mesh(bikeTubeGeo, ironWheelMat);
-    seatPost.rotation.x = -0.25;
-    seatPost.position.set(0, 0.6, -0.1);
-    const handleBar = new THREE.Mesh(track(new THREE.BoxGeometry(0.46, 0.025, 0.025)), brassMat);
-    handleBar.position.set(0, 0.94, 0.42);
-    const saddle = new THREE.Mesh(track(new THREE.BoxGeometry(0.14, 0.05, 0.22)), leatherSeatMat);
-    saddle.position.set(0, 0.86, -0.14);
-    cRoot.add(topBar, downTube, seatPost, handleBar, saddle);
+    const addTube = (ax: number, ay: number, az: number, bx: number, by: number, bz: number, radius = 0.015) => {
+      const dx = bx - ax;
+      const dy = by - ay;
+      const dz = bz - az;
+      const len = Math.hypot(dx, dy, dz) || 0.001;
+      const mesh = new THREE.Mesh(track(new THREE.CylinderGeometry(radius, radius, len, 6)), ironWheelMat);
+      mesh.position.set((ax + bx) / 2, (ay + by) / 2, (az + bz) / 2);
+      mesh.quaternion.setFromUnitVectors(
+        new THREE.Vector3(0, 1, 0),
+        new THREE.Vector3(dx / len, dy / len, dz / len),
+      );
+      cRoot.add(mesh);
+    };
+    addTube(0, 0.86, -0.18, 0, 0.98, 0.2);
+    addTube(0, 0.96, 0.18, 0, BIKE_BB_Y, BIKE_BB_Z);
+    addTube(0, BIKE_BB_Y, BIKE_BB_Z, 0, BIKE_SADDLE_Y - 0.02, BIKE_SADDLE_Z);
+    addTube(0, BIKE_BB_Y, BIKE_BB_Z, 0, BIKE_WHEEL_Y, BIKE_REAR_Z);
+    addTube(0, 0.78, -0.2, 0, BIKE_WHEEL_Y, BIKE_REAR_Z);
+    addTube(0, 0.94, 0.2, 0, BIKE_WHEEL_Y, BIKE_FRONT_Z, 0.013);
+    addTube(0.04, 0.9, 0.2, 0.04, BIKE_WHEEL_Y, BIKE_FRONT_Z, 0.012);
+    addTube(-0.04, 0.9, 0.2, -0.04, BIKE_WHEEL_Y, BIKE_FRONT_Z, 0.012);
+    addTube(0, 0.98, 0.2, 0, BIKE_BAR_Y, BIKE_BAR_Z, 0.014);
+
+    const saddle = new THREE.Mesh(saddleGeo, leatherSeatMat);
+    saddle.position.set(0, BIKE_SADDLE_Y, BIKE_SADDLE_Z);
+    const handleBar = new THREE.Mesh(barGeo, brassMat);
+    handleBar.position.set(0, BIKE_BAR_Y, BIKE_BAR_Z);
+    const chainring = new THREE.Mesh(chainringGeo, ironWheelMat);
+    chainring.position.set(0.02, BIKE_BB_Y, BIKE_BB_Z);
+    const cog = new THREE.Mesh(cogGeo, ironWheelMat);
+    cog.position.set(0.02, BIKE_WHEEL_Y, BIKE_REAR_Z);
+    cRoot.add(saddle, handleBar, chainring, cog);
+
+    const crank = new THREE.Group();
+    crank.position.set(0, BIKE_BB_Y, BIKE_BB_Z);
+    const crankArm = new THREE.Mesh(track(new THREE.BoxGeometry(0.016, 0.016, BIKE_PEDAL_R * 2)), ironWheelMat);
+    const leftPedal = new THREE.Mesh(pedalGeo, leatherSeatMat);
+    leftPedal.position.set(-0.11, 0, BIKE_PEDAL_R);
+    const rightPedal = new THREE.Mesh(pedalGeo, leatherSeatMat);
+    rightPedal.position.set(0.11, 0, -BIKE_PEDAL_R);
+    crank.add(crankArm, leftPedal, rightPedal);
+    cRoot.add(crank);
 
     const rider = charPool.buildHuman(cs.style, idx + 4, { seated: true });
-    rider.group.scale.setScalar(0.92);
-    rider.group.position.set(0, 0.16, -0.16);
-    rider.leftArm.rotation.x = -0.82;
-    rider.rightArm.rotation.x = -0.82;
-    rider.leftElbow.rotation.x = -0.25;
-    rider.rightElbow.rotation.x = -0.25;
+    rider.group.scale.setScalar(RIDER_SCALE);
+    rider.group.position.set(0, RIDER_Y, RIDER_Z);
+    rider.headPivot.rotation.x = 0.22;
+    const gripY = riderLocalY(BIKE_BAR_Y);
+    const gripZ = riderLocalZ(BIKE_BAR_Z);
+    poseSagittalLimb(rider.leftArm, rider.leftElbow, 0.49, 0, gripY, gripZ, 0.25, 0.24, false);
+    poseSagittalLimb(rider.rightArm, rider.rightElbow, 0.49, 0, gripY, gripZ, 0.25, 0.24, false);
     cRoot.add(rider.group);
 
     const pos = sampleCircuitLoop(cs.startProgress, cs.laneOffset);
@@ -1186,6 +1438,8 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
     movingCyclists.push({
       group: cRoot,
       wheels,
+      crank,
+      pedals: [leftPedal, rightPedal],
       leftLeg: rider.leftLeg,
       rightLeg: rider.rightLeg,
       leftKnee: rider.leftKnee,
@@ -1207,6 +1461,7 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
       SPEED_TRAP_ZONE.constableZ
     );
     constableFinch.group.rotation.y = -Math.PI / 2;
+    addFootDisc(constableFinch.group);
     group.add(constableFinch.group);
   }
 
@@ -1221,7 +1476,7 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
   const gullBeakGeo = track(new THREE.ConeGeometry(0.022, 0.1, 5));
   gullBeakGeo.rotateX(Math.PI / 2);
 
-  for (let g = 0; g < 9; g++) {
+  for (let g = 0; g < 15; g++) {
     const gGroup = new THREE.Group();
     const body = new THREE.Mesh(gullBodyGeo, gullWhiteMat);
     const beak = new THREE.Mesh(gullBeakGeo, beakMat);
@@ -1246,16 +1501,381 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
     gGroup.add(body, beak, leftWing, rightWing);
     group.add(gGroup);
 
+    const overStreet =
+      g >= 9
+        ? [
+            { x: -48, z: 4 },
+            { x: -10, z: -6 },
+            { x: 36, z: 8 },
+            { x: 78, z: -4 },
+            { x: 95, z: 42 },
+            { x: 95, z: 110 },
+          ][g - 9]
+        : null;
     seagulls.push({
       group: gGroup,
       leftWing,
       rightWing,
-      centerX: 118 + (g % 3) * 14,
-      centerZ: -18 + (g - 4) * 14,
-      baseY: 11 + (g % 4) * 2.8,
-      orbitR: 12 + (g % 3) * 5,
+      centerX: overStreet ? overStreet.x : 118 + (g % 3) * 14,
+      centerZ: overStreet ? overStreet.z : -18 + (g - 4) * 14,
+      baseY: overStreet ? 9 + (g % 3) * 2.2 : 11 + (g % 4) * 2.8,
+      orbitR: overStreet ? 10 + (g % 3) * 4 : 12 + (g % 3) * 5,
       speed: 0.42 + (g % 3) * 0.11,
       phase: g * 0.85,
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Street animals, a market barrow, flowers, rubbish, a bandstand, the beat
+  // ---------------------------------------------------------------------------
+  const leafMat = track(new THREE.MeshStandardMaterial({ color: 0x2f6b34, roughness: 0.8 }));
+  const petalMat = track(new THREE.MeshStandardMaterial({ color: 0xc4485a, roughness: 0.7 }));
+  const petalCreamMat = track(new THREE.MeshStandardMaterial({ color: 0xf0e2a8, roughness: 0.7 }));
+  const cabbageMat = track(new THREE.MeshStandardMaterial({ color: 0x3d7a3a, roughness: 0.78 }));
+  const paperMat = track(new THREE.MeshStandardMaterial({ color: 0xd9d3c4, roughness: 0.9 }));
+  const bottleMat = track(
+    new THREE.MeshStandardMaterial({
+      color: 0x1f6b45,
+      roughness: 0.22,
+      metalness: 0.15,
+      transparent: true,
+      opacity: 0.78,
+    })
+  );
+  const catMats = [
+    track(new THREE.MeshStandardMaterial({ color: 0xc47a32, roughness: 0.78 })),
+    track(new THREE.MeshStandardMaterial({ color: 0x2a2422, roughness: 0.8 })),
+    track(new THREE.MeshStandardMaterial({ color: 0x8d8a86, roughness: 0.8 })),
+    track(new THREE.MeshStandardMaterial({ color: 0xe7e2d8, roughness: 0.78 })),
+  ];
+  const gooseBodyMat = track(new THREE.MeshStandardMaterial({ color: 0xf4f1ea, roughness: 0.72 }));
+  const gooseFeetMat = track(new THREE.MeshStandardMaterial({ color: 0xe07a22, roughness: 0.6 }));
+
+  const buildCat = (mat: THREE.Material): { group: THREE.Group; tail: THREE.Object3D } => {
+    const cat = new THREE.Group();
+    const body = new THREE.Mesh(track(new THREE.BoxGeometry(0.2, 0.16, 0.4)), mat);
+    body.position.set(0, 0.22, 0);
+    const head = new THREE.Mesh(track(new THREE.BoxGeometry(0.16, 0.14, 0.15)), mat);
+    head.position.set(0, 0.32, 0.24);
+    const earGeo = track(new THREE.ConeGeometry(0.035, 0.07, 4));
+    const earL = new THREE.Mesh(earGeo, mat);
+    earL.position.set(-0.045, 0.42, 0.24);
+    const earR = new THREE.Mesh(earGeo, mat);
+    earR.position.set(0.045, 0.42, 0.24);
+    const tailPivot = new THREE.Group();
+    tailPivot.position.set(0, 0.28, -0.2);
+    const tail = new THREE.Mesh(track(new THREE.CylinderGeometry(0.018, 0.028, 0.28, 5)), mat);
+    tail.position.set(0, 0.1, -0.06);
+    tail.rotation.x = 0.7;
+    tailPivot.add(tail);
+    cat.add(body, head, earL, earR, tailPivot);
+    return { group: cat, tail: tailPivot };
+  };
+
+  const catSpots: { x: number; z: number; sit: boolean; minX: number; maxX: number; minZ: number; maxZ: number }[] = [
+    { x: -52, z: 10.15, sit: true, minX: -60, maxX: -44, minZ: 9.55, maxZ: 10.55 },
+    { x: 26, z: -10.05, sit: false, minX: 16, maxX: 42, minZ: -10.45, maxZ: -9.35 },
+    { x: 86.45, z: 34, sit: true, minX: 85.8, maxX: 87.3, minZ: 26, maxZ: 46 },
+    { x: -111.2, z: -6, sit: false, minX: -111.6, maxX: -109.4, minZ: -12, maxZ: 2 },
+  ];
+  catSpots.forEach((spot, idx) => {
+    const cat = buildCat(catMats[idx % catMats.length]);
+    const y = getTerrainHeightAndSurface(spot.x, spot.z).height;
+    cat.group.position.set(spot.x, y, spot.z);
+    group.add(cat.group);
+    streetCats.push({
+      group: cat.group,
+      tail: cat.tail,
+      homeX: spot.x,
+      homeZ: spot.z,
+      x: spot.x,
+      z: spot.z,
+      yaw: idx % 2 === 0 ? 0 : Math.PI,
+      minX: spot.minX,
+      maxX: spot.maxX,
+      minZ: spot.minZ,
+      maxZ: spot.maxZ,
+      sit: spot.sit,
+      flee: 0,
+      phase: idx * 1.7,
+    });
+  });
+
+  const buildGoose = (): { group: THREE.Group; leftWing: THREE.Object3D; rightWing: THREE.Object3D; neck: THREE.Object3D } => {
+    const goose = new THREE.Group();
+    const body = new THREE.Mesh(track(new THREE.SphereGeometry(0.16, 8, 6)), gooseBodyMat);
+    body.scale.set(1, 0.72, 1.45);
+    body.position.set(0, 0.36, 0);
+    const neck = new THREE.Group();
+    neck.position.set(0, 0.42, 0.16);
+    const neckMesh = new THREE.Mesh(track(new THREE.CylinderGeometry(0.03, 0.04, 0.22, 6)), gooseBodyMat);
+    neckMesh.position.set(0, 0.1, 0.04);
+    neckMesh.rotation.x = -0.5;
+    const head = new THREE.Mesh(track(new THREE.SphereGeometry(0.055, 7, 6)), gooseBodyMat);
+    head.position.set(0, 0.22, 0.1);
+    const beak = new THREE.Mesh(track(new THREE.ConeGeometry(0.02, 0.09, 5)), gooseFeetMat);
+    beak.rotation.x = Math.PI / 2;
+    beak.position.set(0, 0.21, 0.16);
+    neck.add(neckMesh, head, beak);
+    const wingGeo = track(new THREE.BoxGeometry(0.05, 0.1, 0.22));
+    const leftWing = new THREE.Mesh(wingGeo, gooseBodyMat);
+    leftWing.position.set(0.14, 0.38, 0);
+    const rightWing = new THREE.Mesh(wingGeo, gooseBodyMat);
+    rightWing.position.set(-0.14, 0.38, 0);
+    const legGeo = track(new THREE.CylinderGeometry(0.012, 0.012, 0.18, 4));
+    [-0.05, 0.05].forEach((lx) => {
+      const leg = new THREE.Mesh(legGeo, gooseFeetMat);
+      leg.position.set(lx, 0.1, 0.02);
+      goose.add(leg);
+    });
+    goose.add(body, neck, leftWing, rightWing);
+    return { group: goose, leftWing, rightWing, neck };
+  };
+
+  // Geese keep to the south kerb of Harbour Street and a short stretch of the quay.
+  const gooseSpots: { x: number; z: number; minX: number; maxX: number; minZ: number; maxZ: number }[] = [
+    { x: 42, z: 9.7, minX: 34, maxX: 58, minZ: 9.35, maxZ: 10.45 },
+    { x: 46, z: 10.05, minX: 34, maxX: 58, minZ: 9.35, maxZ: 10.45 },
+    { x: 50, z: 9.55, minX: 34, maxX: 58, minZ: 9.35, maxZ: 10.45 },
+    { x: 54, z: 10.15, minX: 34, maxX: 58, minZ: 9.35, maxZ: 10.45 },
+    { x: 86.5, z: 28, minX: 85.9, maxX: 87.2, minZ: 20, maxZ: 40 },
+    { x: 86.2, z: 32, minX: 85.9, maxX: 87.2, minZ: 20, maxZ: 40 },
+  ];
+  gooseSpots.forEach((spot, idx) => {
+    const goose = buildGoose();
+    const y = getTerrainHeightAndSurface(spot.x, spot.z).height;
+    goose.group.position.set(spot.x, y, spot.z);
+    group.add(goose.group);
+    streetGeese.push({
+      group: goose.group,
+      leftWing: goose.leftWing,
+      rightWing: goose.rightWing,
+      neck: goose.neck,
+      x: spot.x,
+      z: spot.z,
+      yaw: 0.4,
+      minX: spot.minX,
+      maxX: spot.maxX,
+      minZ: spot.minZ,
+      maxZ: spot.maxZ,
+      flee: 0,
+      phase: idx * 1.3,
+    });
+  });
+
+  // Market-garden barrow on the north kerb. The seller uses the farmer rig.
+  {
+    const barrow = new THREE.Group();
+    const bx = 30;
+    const bz = -8.7;
+    barrow.position.set(bx, getTerrainHeightAndSurface(bx, bz).height, bz);
+    const bed = new THREE.Mesh(track(new THREE.BoxGeometry(0.85, 0.16, 1.25)), timberCartMat);
+    bed.position.set(0, 0.48, 0);
+    const wheel = new THREE.Mesh(track(new THREE.CylinderGeometry(0.18, 0.18, 0.08, 10)), ironWheelMat);
+    wheel.rotation.z = Math.PI / 2;
+    wheel.position.set(0, 0.2, 0.48);
+    [-0.36, 0.36].forEach((hx) => {
+      const handle = new THREE.Mesh(track(new THREE.BoxGeometry(0.04, 0.04, 0.7)), timberCartMat);
+      handle.position.set(hx, 0.7, -0.7);
+      handle.rotation.x = -0.45;
+      barrow.add(handle);
+    });
+    const cabbageGeo = track(new THREE.SphereGeometry(0.11, 8, 6));
+    [[-0.2, 0.12], [0.18, 0.08], [0, 0.22], [-0.12, -0.16], [0.2, -0.18]].forEach(([cx, cz], i) => {
+      const cabbage = new THREE.Mesh(cabbageGeo, cabbageMat);
+      cabbage.scale.set(1, 0.75, 1);
+      cabbage.position.set(cx, 0.64 + (i % 2) * 0.06, cz);
+      barrow.add(cabbage);
+    });
+    const signCanvas = document.createElement('canvas');
+    signCanvas.width = 256;
+    signCanvas.height = 64;
+    const sctx = signCanvas.getContext('2d')!;
+    sctx.fillStyle = '#f4efe4';
+    sctx.fillRect(0, 0, 256, 64);
+    sctx.strokeStyle = '#241c14';
+    sctx.lineWidth = 8;
+    sctx.strokeRect(6, 6, 244, 52);
+    sctx.fillStyle = '#1d3a24';
+    sctx.font = 'bold 34px Georgia, serif';
+    sctx.textAlign = 'center';
+    sctx.textBaseline = 'middle';
+    sctx.fillText('VEGETABLES', 128, 34);
+    const signTex = track(new THREE.CanvasTexture(signCanvas));
+    signTex.colorSpace = THREE.SRGBColorSpace;
+    const signMat = track(new THREE.MeshStandardMaterial({ map: signTex, roughness: 0.8 }));
+    const sign = new THREE.Mesh(track(new THREE.BoxGeometry(0.72, 0.2, 0.03)), signMat);
+    sign.position.set(0, 0.95, 0.2);
+    barrow.add(bed, wheel, sign);
+    group.add(barrow);
+    obstacles.push({ x: bx, z: bz, radius: 0.95 });
+
+    const seller = createPedestrian('farmer', 1);
+    seller.group.position.set(bx, getTerrainHeightAndSurface(bx, bz - 1.15).height, bz - 1.15);
+    seller.group.rotation.y = 0;
+    seller.leftArm.rotation.x = -0.7;
+    seller.rightArm.rotation.x = -0.7;
+    seller.leftElbow.rotation.x = -0.4;
+    seller.rightElbow.rotation.x = -0.4;
+    addFootDisc(seller.group);
+    group.add(seller.group);
+    const customer = createPedestrian('lady', 5);
+    customer.group.position.set(bx + 1.15, getTerrainHeightAndSurface(bx + 1.15, bz + 0.2).height, bz + 0.35);
+    customer.group.rotation.y = -1.4;
+    addFootDisc(customer.group);
+    group.add(customer.group);
+    spectators.push({
+      group: customer.group,
+      head: customer.headPivot,
+      arms: [customer.leftArm, customer.rightArm],
+      elbows: [customer.leftElbow, customer.rightElbow],
+      phase: 2.2,
+      mode: 'discussing',
+    });
+  }
+
+  // Timber bandstand in Tyne Street, south of the cart barrier and off Harbour Street.
+  {
+    const stand = new THREE.Group();
+    const sx = -24;
+    const sz = 22;
+    stand.position.set(sx, getTerrainHeightAndSurface(sx, sz).height, sz);
+    const deck = new THREE.Mesh(track(new THREE.CylinderGeometry(2.15, 2.15, 0.16, 8)), timberCartMat);
+    deck.position.y = 0.28;
+    const roof = new THREE.Mesh(track(new THREE.ConeGeometry(2.7, 1.15, 8)), barrierRedMat);
+    roof.position.y = 3.15;
+    const finial = new THREE.Mesh(track(new THREE.SphereGeometry(0.1, 8, 6)), brassMat);
+    finial.position.y = 3.78;
+    for (let p = 0; p < 8; p++) {
+      const ang = (p / 8) * Math.PI * 2;
+      const post = new THREE.Mesh(track(new THREE.CylinderGeometry(0.06, 0.07, 2.55, 6)), timberCartMat);
+      post.position.set(Math.cos(ang) * 1.95, 1.55, Math.sin(ang) * 1.95);
+      const rail = new THREE.Mesh(track(new THREE.BoxGeometry(1.45, 0.06, 0.06)), timberCartMat);
+      rail.position.set(Math.cos(ang + Math.PI / 8) * 1.95, 0.85, Math.sin(ang + Math.PI / 8) * 1.95);
+      rail.rotation.y = -ang - Math.PI / 8;
+      stand.add(post, rail);
+    }
+    stand.add(deck, roof, finial);
+    group.add(stand);
+    obstacles.push({ x: sx, z: sz, radius: 2.2 });
+
+    const band: { dx: number; dz: number; style: CitizenStyle; mode: IdleSpectator['mode'] }[] = [
+      { dx: 0, dz: 0.2, style: 'gentleman', mode: 'cheering' },
+      { dx: -0.85, dz: -0.35, style: 'worker', mode: 'cheering' },
+      { dx: 0.85, dz: -0.25, style: 'schoolboy', mode: 'watching' },
+    ];
+    band.forEach((m, mi) => {
+      const ped = createPedestrian(m.style, 11 + mi);
+      ped.group.position.set(m.dx, 0.38, m.dz);
+      ped.group.rotation.y = Math.atan2(-m.dx, -m.dz);
+      if (mi < 2) {
+        const horn = new THREE.Mesh(track(new THREE.CylinderGeometry(0.03, 0.055, 0.42, 8)), brassMat);
+        horn.rotation.x = Math.PI / 2;
+        horn.position.set(0.12, 1.25, 0.28);
+        ped.group.add(horn);
+      } else {
+        const drum = new THREE.Mesh(track(new THREE.CylinderGeometry(0.16, 0.16, 0.12, 10)), barrierWhiteMat);
+        drum.position.set(0, 0.95, 0.22);
+        ped.group.add(drum);
+      }
+      addFootDisc(ped.group);
+      stand.add(ped.group);
+      spectators.push({
+        group: ped.group,
+        head: ped.headPivot,
+        arms: [ped.leftArm, ped.rightArm],
+        elbows: [ped.leftElbow, ped.rightElbow],
+        phase: mi * 0.8,
+        mode: m.mode,
+      });
+    });
+
+    const stemGeo = track(new THREE.CylinderGeometry(0.012, 0.012, 0.28, 4));
+    const bloomGeo = track(new THREE.SphereGeometry(0.06, 6, 5));
+    for (let f = 0; f < 10; f++) {
+      const ang = (f / 10) * Math.PI * 2;
+      const fx = sx + Math.cos(ang) * 2.7;
+      const fz = sz + Math.sin(ang) * 2.7;
+      const stem = new THREE.Mesh(stemGeo, leafMat);
+      const bloom = new THREE.Mesh(bloomGeo, f % 2 === 0 ? petalMat : petalCreamMat);
+      const y = getTerrainHeightAndSurface(fx, fz).height;
+      stem.position.set(fx, y + 0.14, fz);
+      bloom.position.set(fx, y + 0.32, fz);
+      group.add(stem, bloom);
+    }
+  }
+
+  // A short flower row on the Criterion front, and a little street rubbish. Not a tip.
+  {
+    const stemGeo = track(new THREE.CylinderGeometry(0.012, 0.012, 0.26, 4));
+    const bloomGeo = track(new THREE.SphereGeometry(0.055, 6, 5));
+    for (let f = 0; f < 7; f++) {
+      const fx = -62 + f * 0.55;
+      const fz = 10.62;
+      const y = getTerrainHeightAndSurface(fx, fz).height;
+      const stem = new THREE.Mesh(stemGeo, leafMat);
+      const bloom = new THREE.Mesh(bloomGeo, f % 2 === 0 ? petalCreamMat : petalMat);
+      stem.position.set(fx, y + 0.13, fz);
+      bloom.position.set(fx, y + 0.28, fz);
+      group.add(stem, bloom);
+    }
+    const scraps: { x: number; z: number; kind: 'paper' | 'bottle' | 'crate' }[] = [
+      { x: -44.5, z: 10.35, kind: 'bottle' },
+      { x: -43.6, z: 10.15, kind: 'paper' },
+      { x: 38, z: -10.2, kind: 'paper' },
+      { x: 39.1, z: -9.85, kind: 'bottle' },
+      { x: 86.4, z: 52, kind: 'crate' },
+      { x: 86.1, z: 52.6, kind: 'paper' },
+    ];
+    scraps.forEach((sc) => {
+      const y = getTerrainHeightAndSurface(sc.x, sc.z).height;
+      let mesh: THREE.Mesh;
+      if (sc.kind === 'bottle') {
+        mesh = new THREE.Mesh(track(new THREE.CylinderGeometry(0.035, 0.04, 0.18, 6)), bottleMat);
+        mesh.position.set(sc.x, y + 0.09, sc.z);
+        mesh.rotation.z = 0.9;
+      } else if (sc.kind === 'paper') {
+        mesh = new THREE.Mesh(track(new THREE.BoxGeometry(0.22, 0.012, 0.16)), paperMat);
+        mesh.position.set(sc.x, y + 0.02, sc.z);
+        mesh.rotation.y = 0.6;
+      } else {
+        mesh = new THREE.Mesh(track(new THREE.BoxGeometry(0.38, 0.28, 0.32)), burlapMat);
+        mesh.position.set(sc.x, y + 0.14, sc.z);
+        mesh.rotation.y = 0.3;
+      }
+      group.add(mesh);
+    });
+  }
+
+  // Harbour Street beat. He walks the north kerb until the driving gets reckless.
+  {
+    const cop = createPedestrian('constable', 4);
+    const hx = -48;
+    const hz = -9.62;
+    cop.group.position.set(hx, getTerrainHeightAndSurface(hx, hz).height, hz);
+    cop.group.rotation.y = 0;
+    addFootDisc(cop.group);
+    group.add(cop.group);
+    beatConstables.push({
+      group: cop.group,
+      leftLeg: cop.leftLeg,
+      rightLeg: cop.rightLeg,
+      leftKnee: cop.leftKnee,
+      rightKnee: cop.rightKnee,
+      leftArm: cop.leftArm,
+      rightArm: cop.rightArm,
+      leftElbow: cop.leftElbow,
+      rightElbow: cop.rightElbow,
+      head: cop.headPivot,
+      homeX: hx,
+      homeZ: hz,
+      x: hx,
+      z: hz,
+      yaw: 0,
+      speed: 0,
+      chasing: false,
+      chaseLeft: 0,
+      phase: 0.6,
     });
   }
 
@@ -1295,6 +1915,7 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
 
   const piperRig = charPool.buildHuman('piper', 0);
   piperBodyPivot.add(piperRig.group);
+  addFootDisc(piperRig.group);
 
   const piperLegs = [piperRig.leftLeg, piperRig.rightLeg];
   const piperKnees = [piperRig.leftKnee, piperRig.rightKnee];
@@ -1425,6 +2046,7 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
           const wy = getTerrainHeightAndSurface(curX, curZ).height;
           w.group.position.set(curX, wy + Math.abs(Math.sin(elapsed * 9 + w.phase)) * 0.04, curZ);
           w.group.rotation.y = Math.atan2(pX - curX, pZ - curZ);
+          w.group.rotation.z = 0;
           w.leftLeg.rotation.x = THREE.MathUtils.damp(w.leftLeg.rotation.x, 0, 12, dt);
           w.rightLeg.rotation.x = THREE.MathUtils.damp(w.rightLeg.rotation.x, 0, 12, dt);
           w.leftKnee.rotation.x = THREE.MathUtils.damp(w.leftKnee.rotation.x, 0, 12, dt);
@@ -1434,7 +2056,11 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
           w.leftElbow.rotation.x = -0.45;
           w.rightElbow.rotation.x = -0.45;
         } else {
-          w.progress += (w.speed / segLen) * dt * w.dir;
+          const unsteady = w.gait === 'unsteady';
+          const paused = unsteady && Math.sin(elapsed * 0.55 + w.phase) > 0.62;
+          if (!paused) {
+            w.progress += (w.speed / segLen) * dt * w.dir;
+          }
           if (w.progress >= 1) {
             w.progress = 1;
             w.dir = -1;
@@ -1445,17 +2071,19 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
           const wx = w.x1 + (w.x2 - w.x1) * w.progress;
           const wz = w.z1 + (w.z2 - w.z1) * w.progress;
           const wy = getTerrainHeightAndSurface(wx, wz).height;
-          w.group.position.set(wx, wy, wz);
+          const sway = unsteady ? Math.sin(elapsed * 1.7 + w.phase) : 0;
+          w.group.position.set(wx, wy + Math.abs(sway) * 0.045, wz);
           const dirX = (w.x2 - w.x1) * w.dir;
           const dirZ = (w.z2 - w.z1) * w.dir;
           w.group.rotation.y = Math.atan2(dirX, dirZ);
+          w.group.rotation.z = sway * 0.16;
 
-          const phase = elapsed * w.speed * 4.5 + w.phase;
-          const stride = Math.sin(phase) * 0.48;
+          const phase = elapsed * w.speed * (unsteady ? 3.1 : 4.5) + w.phase;
+          const stride = Math.sin(phase) * (unsteady ? 0.26 : 0.48);
           w.leftLeg.rotation.x = stride;
           w.rightLeg.rotation.x = -stride;
-          w.leftKnee.rotation.x = Math.max(0, -Math.cos(phase)) * 0.48;
-          w.rightKnee.rotation.x = Math.max(0, Math.cos(phase)) * 0.48;
+          w.leftKnee.rotation.x = Math.max(0, -Math.cos(phase)) * (unsteady ? 0.3 : 0.48);
+          w.rightKnee.rotation.x = Math.max(0, Math.cos(phase)) * (unsteady ? 0.3 : 0.48);
           w.leftArm.rotation.x = -stride * 0.65;
           w.rightArm.rotation.x = stride * 0.65;
           w.leftElbow.rotation.x = -0.25 - Math.max(0, -stride) * 0.25;
@@ -1838,13 +2466,184 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
         for (let w = 0; w < cyc.wheels.length; w++) {
           cyc.wheels[w].rotation.x += (cyc.speedMps / 0.32) * dt;
         }
-        const pedalPhase = elapsed * cyc.speedMps * 2.1 + cyc.phase;
-        cyc.leftLeg.rotation.x = -0.5 + Math.sin(pedalPhase) * 0.42;
-        cyc.rightLeg.rotation.x = -0.5 - Math.sin(pedalPhase) * 0.42;
-        cyc.leftKnee.rotation.x = 0.55 + Math.max(0, -Math.sin(pedalPhase)) * 0.45;
-        cyc.rightKnee.rotation.x = 0.55 + Math.max(0, Math.sin(pedalPhase)) * 0.45;
+        const pedalPhase = elapsed * cyc.speedMps * 1.7 + cyc.phase;
+        cyc.crank.rotation.x = pedalPhase;
+        cyc.pedals[0].rotation.x = -pedalPhase;
+        cyc.pedals[1].rotation.x = -pedalPhase;
+        const leftPedalY = BIKE_BB_Y - BIKE_PEDAL_R * Math.sin(pedalPhase);
+        const leftPedalZ = BIKE_BB_Z + BIKE_PEDAL_R * Math.cos(pedalPhase);
+        const rightPedalY = BIKE_BB_Y + BIKE_PEDAL_R * Math.sin(pedalPhase);
+        const rightPedalZ = BIKE_BB_Z - BIKE_PEDAL_R * Math.cos(pedalPhase);
+        poseSagittalLimb(
+          cyc.leftLeg, cyc.leftKnee,
+          RIDER_HIP_Y, RIDER_HIP_Z,
+          riderLocalY(leftPedalY), riderLocalZ(leftPedalZ),
+          0.42, 0.46, true,
+        );
+        poseSagittalLimb(
+          cyc.rightLeg, cyc.rightKnee,
+          RIDER_HIP_Y, RIDER_HIP_Z,
+          riderLocalY(rightPedalY), riderLocalZ(rightPedalZ),
+          0.42, 0.46, true,
+        );
         obstacles[cycOffset + i].x = pos.x;
         obstacles[cycOffset + i].z = pos.z;
+      }
+
+      // Cats bolt along the kerb. Geese waddle the same way, then run from the car.
+      for (let i = 0; i < streetCats.length; i++) {
+        const cat = streetCats[i];
+        const distCar = Math.hypot(pX - cat.x, pZ - cat.z);
+        if (distCar < 8 && pSpeed > 0.7) cat.flee = Math.max(cat.flee, 1.5);
+        else cat.flee = Math.max(0, cat.flee - dt);
+        let dirX = 0;
+        let dirZ = 0;
+        let spd = 0;
+        if (cat.flee > 0) {
+          dirX = cat.x - pX;
+          dirZ = cat.z - pZ;
+          spd = 3.3;
+        } else if (!cat.sit) {
+          const tx = (cat.minX + cat.maxX) * 0.5 + Math.sin(elapsed * 0.45 + cat.phase) * (cat.maxX - cat.minX) * 0.35;
+          const tz = (cat.minZ + cat.maxZ) * 0.5 + Math.cos(elapsed * 0.38 + cat.phase) * (cat.maxZ - cat.minZ) * 0.35;
+          dirX = tx - cat.x;
+          dirZ = tz - cat.z;
+          spd = 0.38;
+        }
+        const len = Math.hypot(dirX, dirZ);
+        if (spd > 0.05 && len > 0.05) {
+          cat.x = Math.min(cat.maxX, Math.max(cat.minX, cat.x + (dirX / len) * spd * dt));
+          cat.z = Math.min(cat.maxZ, Math.max(cat.minZ, cat.z + (dirZ / len) * spd * dt));
+          const face = Math.atan2(dirX, dirZ);
+          cat.yaw += shortestAngleDiff(cat.yaw, face) * Math.min(1, dt * 8);
+        }
+        const cy = getTerrainHeightAndSurface(cat.x, cat.z).height;
+        const crouch = cat.flee > 0 ? 0.04 : 0;
+        cat.group.position.set(cat.x, cy - crouch, cat.z);
+        cat.group.rotation.y = cat.yaw;
+        cat.tail.rotation.y = Math.sin(elapsed * (cat.flee > 0 ? 16 : 4) + cat.phase) * (cat.flee > 0 ? 0.8 : 0.35);
+      }
+
+      for (let i = 0; i < streetGeese.length; i++) {
+        const goose = streetGeese[i];
+        const distCar = Math.hypot(pX - goose.x, pZ - goose.z);
+        if (distCar < 13 && (pSpeed > 1.4 || badDrive > 0.2 || hornFired)) goose.flee = Math.max(goose.flee, 2.2);
+        else goose.flee = Math.max(0, goose.flee - dt);
+        const midX = (goose.minX + goose.maxX) * 0.5;
+        const midZ = (goose.minZ + goose.maxZ) * 0.5;
+        let dirX: number;
+        let dirZ: number;
+        let spd: number;
+        if (goose.flee > 0) {
+          dirX = goose.x - pX + (goose.x - midX) * 0.35;
+          dirZ = midZ - goose.z;
+          spd = 2.6;
+        } else {
+          dirX = midX + Math.sin(elapsed * 0.33 + goose.phase) * (goose.maxX - goose.minX) * 0.38 - goose.x;
+          dirZ = midZ + Math.cos(elapsed * 0.27 + goose.phase) * (goose.maxZ - goose.minZ) * 0.38 - goose.z;
+          spd = 0.42;
+        }
+        const len = Math.hypot(dirX, dirZ) || 1;
+        goose.x = Math.min(goose.maxX, Math.max(goose.minX, goose.x + (dirX / len) * spd * dt));
+        goose.z = Math.min(goose.maxZ, Math.max(goose.minZ, goose.z + (dirZ / len) * spd * dt));
+        const face = Math.atan2(dirX, dirZ);
+        goose.yaw += shortestAngleDiff(goose.yaw, face) * Math.min(1, dt * 6);
+        const gy = getTerrainHeightAndSurface(goose.x, goose.z).height;
+        const step = Math.abs(Math.sin(elapsed * (goose.flee > 0 ? 14 : 6) + goose.phase));
+        goose.group.position.set(goose.x, gy + (spd > 0.8 ? step * 0.04 : 0), goose.z);
+        goose.group.rotation.y = goose.yaw;
+        goose.group.rotation.z = Math.sin(elapsed * 6 + goose.phase) * (spd > 0.8 ? 0.12 : 0.05);
+        goose.neck.rotation.x = goose.flee > 0 ? -0.45 : Math.sin(elapsed * 2.2 + goose.phase) * 0.2;
+        const flap = goose.flee > 0 ? Math.sin(elapsed * 18 + goose.phase) * 0.5 : 0.05;
+        goose.leftWing.rotation.z = flap;
+        goose.rightWing.rotation.z = -flap;
+      }
+
+      // The beat constable gives chase when the car is driven recklessly nearby.
+      for (let i = 0; i < beatConstables.length; i++) {
+        const cop = beatConstables[i];
+        const distCar = Math.hypot(pX - cop.x, pZ - cop.z);
+        const distHome = Math.hypot(pX - cop.homeX, pZ - cop.homeZ);
+        const reckless = distHome < 70 && (badDrive > 0.42 || hornFired || (pSpeed > 9 && distCar < 26));
+        if (reckless) {
+          cop.chasing = true;
+          cop.chaseLeft = 3.4;
+        } else {
+          cop.chaseLeft = Math.max(0, cop.chaseLeft - dt);
+          if (cop.chaseLeft <= 0 || distHome > 78) cop.chasing = false;
+        }
+
+        let targetX = cop.homeX + Math.sin(elapsed * 0.32 + cop.phase) * 8;
+        let targetZ = cop.homeZ;
+        let desired = 1.05;
+        if (cop.chasing) {
+          const fwdX = Math.sin(pYaw);
+          const fwdZ = Math.cos(pYaw);
+          targetX = pX - fwdX * 2.35;
+          targetZ = pZ - fwdZ * 2.35;
+          desired = distCar > 2.5 ? 5.6 : 0;
+        }
+        cop.speed = THREE.MathUtils.damp(cop.speed, desired, 6, dt);
+        if (cop.speed > 0.15) {
+          const toX = targetX - cop.x;
+          const toZ = targetZ - cop.z;
+          const distT = Math.hypot(toX, toZ) || 1;
+          let nextX = cop.x + (toX / distT) * cop.speed * dt;
+          let nextZ = cop.z + (toZ / distT) * cop.speed * dt;
+          const carDx = nextX - pX;
+          const carDz = nextZ - pZ;
+          const carD = Math.hypot(carDx, carDz);
+          if (carD < 2.15 && carD > 0.001) {
+            nextX = pX + (carDx / carD) * 2.15;
+            nextZ = pZ + (carDz / carD) * 2.15;
+          }
+          for (let c = 0; c < WORLD_COLLIDERS.length; c++) {
+            const box = WORLD_COLLIDERS[c];
+            const pad = 0.45;
+            if (nextX > box.minX - pad && nextX < box.maxX + pad && nextZ > box.minZ - pad && nextZ < box.maxZ + pad) {
+              const dxMin = Math.abs(nextX - (box.minX - pad));
+              const dxMax = Math.abs(box.maxX + pad - nextX);
+              const dzMin = Math.abs(nextZ - (box.minZ - pad));
+              const dzMax = Math.abs(box.maxZ + pad - nextZ);
+              const m = Math.min(dxMin, dxMax, dzMin, dzMax);
+              if (m === dxMin) nextX = box.minX - pad;
+              else if (m === dxMax) nextX = box.maxX + pad;
+              else if (m === dzMin) nextZ = box.minZ - pad;
+              else nextZ = box.maxZ + pad;
+            }
+          }
+          const moveYaw = Math.atan2(nextX - cop.x, nextZ - cop.z);
+          if (Math.hypot(nextX - cop.x, nextZ - cop.z) > 0.004) {
+            cop.yaw += shortestAngleDiff(cop.yaw, moveYaw) * Math.min(1, dt * 9);
+          }
+          cop.x = nextX;
+          cop.z = nextZ;
+        } else if (cop.chasing) {
+          const faceYaw = Math.atan2(pX - cop.x, pZ - cop.z);
+          cop.yaw += shortestAngleDiff(cop.yaw, faceYaw) * Math.min(1, dt * 8);
+        }
+        const copY = getTerrainHeightAndSurface(cop.x, cop.z).height;
+        cop.group.position.set(cop.x, copY, cop.z);
+        cop.group.rotation.y = cop.yaw;
+        const running = cop.speed > 2.2;
+        const phase = elapsed * (running ? 11 : 4.2) + cop.phase;
+        const stride = Math.sin(phase) * (running ? 0.7 : cop.speed > 0.3 ? 0.4 : 0);
+        cop.leftLeg.rotation.x = stride;
+        cop.rightLeg.rotation.x = -stride;
+        cop.leftKnee.rotation.x = Math.max(0, -Math.cos(phase)) * (running ? 0.55 : 0.35);
+        cop.rightKnee.rotation.x = Math.max(0, Math.cos(phase)) * (running ? 0.55 : 0.35);
+        if (cop.chasing && distCar < 5) {
+          cop.rightArm.rotation.x = -2.05 + Math.sin(elapsed * 10) * 0.28;
+          cop.rightElbow.rotation.x = -0.3;
+          cop.leftArm.rotation.x = -0.4;
+          cop.leftElbow.rotation.x = -0.5;
+        } else {
+          cop.leftArm.rotation.x = -stride * 0.7;
+          cop.rightArm.rotation.x = stride * 0.7;
+          cop.leftElbow.rotation.x = -0.28;
+          cop.rightElbow.rotation.x = -0.28;
+        }
+        cop.head.rotation.y = cop.chasing ? 0 : Math.sin(elapsed * 1.1) * 0.3;
       }
 
       // Animate Constable Finch watching Thames North speed trap with pocket watch

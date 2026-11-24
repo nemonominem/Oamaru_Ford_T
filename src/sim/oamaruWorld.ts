@@ -1,12 +1,20 @@
 import * as THREE from 'three';
 import { RADIATOR_STANDPIPE, ROAD_OBSTRUCTIONS, ROAD_POTHOLES, getTerrainHeightAndSurface } from './terrain';
 import { SignStyle, TextureBundle } from './textures';
+import { HarbourWater, createHarbourWater } from './waterSurface';
 
 export interface OamaruWorldHandle {
   group: THREE.Group;
-  update: (elapsedTime: number, timeHour?: number) => void;
+  update: (elapsedTime: number, timeHour?: number, view?: THREE.Vector3) => void;
   getTrainPos: () => { x: number; z: number };
-  setAtmosphereVisuals: (wetness: number, snowCover: number, nightFactor: number) => void;
+  setAtmosphereVisuals: (
+    wetness: number,
+    snowCover: number,
+    nightFactor: number,
+    skyColor: THREE.Color,
+    sunDir: THREE.Vector3,
+    sunColor: THREE.Color
+  ) => void;
   dispose: () => void;
 }
 
@@ -55,8 +63,34 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
   const terrainGeo = track(new THREE.PlaneGeometry(terrainW, terrainD, segX, segZ));
   terrainGeo.rotateX(-Math.PI / 2);
 
+  const roadBands: readonly [number, number, number, number][] = [
+    [-112, 104, -7.2, 7.2],
+    [-30.8, -17.2, -95, 122],
+    [-159, 102, -74.8, -61.2],
+    [-111.5, -96.5, -156, 125],
+    [-159.2, -144.8, -156, 204],
+    [-160, 102, 110.8, 125.2],
+    [-160, 102, 188.8, 203.2],
+    [-160, -96.5, -155.2, -140.8],
+    [88.2, 101.8, -95, 204],
+    [12, 86, -61.5, -45],
+  ];
+  const vergeWear = (x: number, z: number): number => {
+    let nearest = 99;
+    for (let r = 0; r < roadBands.length; r++) {
+      const band = roadBands[r];
+      const dx = x < band[0] ? band[0] - x : x > band[1] ? x - band[1] : 0;
+      const dz = z < band[2] ? band[2] - z : z > band[3] ? z - band[3] : 0;
+      nearest = Math.min(nearest, Math.hypot(dx, dz));
+    }
+    if (nearest < 0.4) return 1;
+    if (nearest < 3.2) return 1 - (nearest - 0.4) / 2.8;
+    return 0;
+  };
+
   const posAttr = terrainGeo.attributes.position;
   const colors = new Float32Array(posAttr.count * 3);
+  const worn = new Float32Array(posAttr.count);
   const cGrass = new THREE.Color(0x697449);
   const cMacadam = new THREE.Color(0xb2a389);
   const cCobble = new THREE.Color(0x524f4b);
@@ -83,8 +117,12 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
     colors[i * 3] = tmpColor.r;
     colors[i * 3 + 1] = tmpColor.g;
     colors[i * 3 + 2] = tmpColor.b;
+    if (surface === 'grass') worn[i] = vergeWear(vx, vz);
+    else if (surface !== 'water') worn[i] = 1;
+    if (vx > 102 && vx < 108) worn[i] = Math.max(worn[i], 0.7);
   }
   terrainGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  terrainGeo.setAttribute('worn', new THREE.BufferAttribute(worn, 1));
   terrainGeo.computeVertexNormals();
 
   const terrainMat = track(
@@ -95,6 +133,30 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
       metalness: 0.02,
     })
   );
+  terrainMat.onBeforeCompile = (shader) => {
+    shader.uniforms.wornMap = { value: textures.wornEarth };
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute float worn;\nvarying float vWorn;')
+      .replace('#include <uv_vertex>', '#include <uv_vertex>\nvWorn = worn;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <common>',
+        '#include <common>\nuniform sampler2D wornMap;\nvarying float vWorn;'
+      )
+      .replace(
+        '#include <map_fragment>',
+        `#ifdef USE_MAP
+  vec4 sampledDiffuseColor = texture2D(map, vMapUv);
+  vec4 wornDiffuse = texture2D(wornMap, vMapUv);
+  sampledDiffuseColor = mix(sampledDiffuseColor, wornDiffuse, clamp(vWorn, 0.0, 1.0));
+  #ifdef DECODE_VIDEO_TEXTURE
+    sampledDiffuseColor = sRGBTransferEOTF(sampledDiffuseColor);
+  #endif
+  diffuseColor *= sampledDiffuseColor;
+#endif`
+      );
+  };
+  terrainMat.customProgramCacheKey = () => 'terrain-worn';
   const terrainMesh = new THREE.Mesh(terrainGeo, terrainMat);
   terrainMesh.receiveShadow = true;
   group.add(terrainMesh);
@@ -135,8 +197,8 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
   const macadamMat = track(
     new THREE.MeshStandardMaterial({
       map: textures.macadam,
-      roughness: 0.9,
-      metalness: 0.04,
+      roughness: 0.92,
+      metalness: 0.02,
       polygonOffset: true,
       polygonOffsetFactor: -1,
       polygonOffsetUnits: -1,
@@ -146,10 +208,10 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
   const cobbleMat = track(
     new THREE.MeshStandardMaterial({
       map: textures.cobbles,
-      bumpMap: textures.cobblesBump,
-      bumpScale: 0.035,
-      roughness: 0.78,
-      metalness: 0.08,
+      normalMap: textures.cobblesNormal,
+      normalScale: new THREE.Vector2(1.35, 1.35),
+      roughness: 0.82,
+      metalness: 0.02,
       polygonOffset: true,
       polygonOffsetFactor: -2,
       polygonOffsetUnits: -2,
@@ -260,8 +322,10 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
   const potholePuddleMat = track(
     new THREE.MeshStandardMaterial({
       color: 0x3b352c,
-      roughness: 0.42,
-      metalness: 0.14,
+      normalMap: textures.cobblesNormal,
+      normalScale: new THREE.Vector2(0.55, 0.55),
+      roughness: 0.38,
+      metalness: 0.02,
       polygonOffset: true,
       polygonOffsetFactor: -6,
       polygonOffsetUnits: -6,
@@ -680,19 +744,8 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
   }
   group.add(shipGroup);
 
-  const waterGeo = track(new THREE.PlaneGeometry(260, 560, 1, 1));
-  waterGeo.rotateX(-Math.PI / 2);
-  const waterMat = track(
-    new THREE.MeshPhysicalMaterial({
-      color: 0x264859,
-      roughness: isSoftwareGl ? 0.35 : 0.16,
-      metalness: 0.18,
-      clearcoat: isSoftwareGl ? 0 : 0.65,
-    })
-  );
-  const ocean = new THREE.Mesh(waterGeo, waterMat);
-  ocean.position.set(226, -1.3, 24);
-  group.add(ocean);
+  const harbour: HarbourWater = createHarbourWater();
+  group.add(harbour.mesh);
 
   // ---------------------------------------------------------------------------
   // 4. Historical Whitestone Victorian Buildings (Extended Precinct + Thames & Severn)
@@ -2129,7 +2182,8 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
     pierEast.castShadow = true;
 
     const girderMat = track(new THREE.MeshStandardMaterial({ color: 0x26292d, roughness: 0.58, metalness: 0.65 }));
-    const deckSlab = new THREE.Mesh(track(new THREE.BoxGeometry(74, 0.55, 7.6)), timberCartMat);
+    const deckTimber = track(new THREE.MeshStandardMaterial({ color: 0x6c4c2f, roughness: 0.82 }));
+    const deckSlab = new THREE.Mesh(track(new THREE.BoxGeometry(74, 0.55, 7.6)), deckTimber);
     deckSlab.position.set(-129, deckY, -124);
     deckSlab.castShadow = true;
     const girderSouth = new THREE.Mesh(track(new THREE.BoxGeometry(74, 2.1, 0.45)), girderMat);
@@ -2200,6 +2254,57 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
   headInst.computeBoundingSphere();
   group.add(postInst, headInst);
 
+  const lampArmGeo = track(new THREE.BoxGeometry(0.62, 0.055, 0.055));
+  lampArmGeo.translate(0.31, 0, 0);
+  const lampArmInst = new THREE.InstancedMesh(lampArmGeo, wroughtIronMat, lampCoords.length);
+  const haloCanvas = document.createElement('canvas');
+  haloCanvas.width = 256;
+  haloCanvas.height = 256;
+  const haloCtx = haloCanvas.getContext('2d')!;
+  const haloGrad = haloCtx.createRadialGradient(128, 128, 0, 128, 128, 126);
+  haloGrad.addColorStop(0, 'rgba(255, 246, 220, 0.96)');
+  haloGrad.addColorStop(0.07, 'rgba(255, 214, 142, 0.72)');
+  haloGrad.addColorStop(0.18, 'rgba(255, 168, 64, 0.32)');
+  haloGrad.addColorStop(0.42, 'rgba(255, 132, 36, 0.1)');
+  haloGrad.addColorStop(1, 'rgba(255, 110, 24, 0)');
+  haloCtx.fillStyle = haloGrad;
+  haloCtx.fillRect(0, 0, 256, 256);
+  const mantle = haloCtx.createRadialGradient(128, 128, 2, 128, 128, 18);
+  mantle.addColorStop(0, 'rgba(255, 252, 240, 0.9)');
+  mantle.addColorStop(1, 'rgba(255, 220, 160, 0)');
+  haloCtx.fillStyle = mantle;
+  haloCtx.fillRect(0, 0, 256, 256);
+  const haloTex = track(new THREE.CanvasTexture(haloCanvas));
+  haloTex.colorSpace = THREE.SRGBColorSpace;
+  const haloMat = track(
+    new THREE.SpriteMaterial({
+      map: haloTex,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      opacity: 0,
+    })
+  );
+  const lampHalos: THREE.Sprite[] = [];
+  lampCoords.forEach(([lx, lz], i) => {
+    const ly = getTerrainHeightAndSurface(lx, lz).height;
+    const towardStreet = Math.abs(lz) > 2 && Math.abs(lz) < 20 ? (lz > 0 ? -Math.PI / 2 : Math.PI / 2) : lx > 0 ? Math.PI : 0;
+    dummy.position.set(lx, ly + 4.55, lz);
+    dummy.rotation.set(0, towardStreet, 0);
+    dummy.scale.set(1, 1, 1);
+    dummy.updateMatrix();
+    lampArmInst.setMatrixAt(i, dummy.matrix);
+
+    const halo = new THREE.Sprite(haloMat);
+    halo.position.set(lx, ly + 4.75, lz);
+    halo.scale.set(3.4, 3.4, 1);
+    halo.visible = false;
+    group.add(halo);
+    lampHalos.push(halo);
+  });
+  lampArmInst.computeBoundingSphere();
+  group.add(lampArmInst);
+
   const streetPointLights: THREE.PointLight[] = [];
   const lightPositions: [number, number][] = [
     [-46, 8.8],
@@ -2228,38 +2333,63 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
     [112, 108], [115, 78], [58, -108], [18, -108], [-55, -108],
     [-88, -108], [78, -104], [-188, -80], [-172, 145], [108, 135],
   ];
-  const trunkGeo = track(new THREE.CylinderGeometry(0.18, 0.34, 4.4, 7));
   const trunkMat = track(new THREE.MeshStandardMaterial({ color: 0x4e3e2d, roughness: 0.92 }));
-  const canopyGeo = track(new THREE.ConeGeometry(2.1, 5.2, 8));
-  const canopyMat = track(new THREE.MeshStandardMaterial({ color: 0x3b5332, roughness: 0.88 }));
+  const cardMat = (map: THREE.Texture) =>
+    track(
+      new THREE.MeshStandardMaterial({
+        map,
+        color: 0xffffff,
+        roughness: 0.92,
+        metalness: 0,
+        transparent: true,
+        alphaTest: 0.28,
+        side: THREE.DoubleSide,
+      })
+    );
+  const cabbageMat = cardMat(textures.cabbageTree);
+  const macrocarpaMat = cardMat(textures.macrocarpa);
 
-  const trunkInst = new THREE.InstancedMesh(trunkGeo, trunkMat, treeCoords.length);
-  const canopyInst = new THREE.InstancedMesh(canopyGeo, canopyMat, treeCoords.length);
+  // One plane, yawed toward the camera. A second crossed plane shows up as a
+  // knife edge through a wide crown. Local +z faces the viewer when
+  // rotation.y = atan2(camera.x - x, camera.z - z).
+  const uprightCard = (width: number, height: number) => {
+    const g = track(new THREE.PlaneGeometry(width, height));
+    g.translate(0, height * 0.5, 0);
+    return g;
+  };
+  const foliageBillboards: { mesh: THREE.InstancedMesh; places: { x: number; y: number; z: number; s: number }[] }[] = [];
+  const cabbageGeo = uprightCard(3.6, 7.2);
+  const macroGeo = uprightCard(10.4, 5.2);
+  const cabbageCoords = treeCoords.filter((_, i) => i % 2 === 0);
+  const macroCoords = treeCoords.filter((_, i) => i % 2 === 1);
+  const cabbageInst = new THREE.InstancedMesh(cabbageGeo, cabbageMat, cabbageCoords.length);
+  const macroInst = new THREE.InstancedMesh(macroGeo, macrocarpaMat, macroCoords.length);
+  cabbageInst.name = 'cabbage-cards';
+  macroInst.name = 'macrocarpa-cards';
   const tint = new THREE.Color();
-
-  treeCoords.forEach(([tx, tz], i) => {
-    const ty = getTerrainHeightAndSurface(tx, tz).height;
-    const sc = 0.85 + ((i * 37) % 10) * 0.032;
-
-    dummy.position.set(tx, ty + 2.1 * sc, tz);
-    dummy.rotation.set(0, i * 0.9, 0);
-    dummy.scale.set(sc, sc, sc);
-    dummy.updateMatrix();
-    trunkInst.setMatrixAt(i, dummy.matrix);
-
-    dummy.position.set(tx, ty + 5.1 * sc, tz);
-    dummy.updateMatrix();
-    canopyInst.setMatrixAt(i, dummy.matrix);
-
-    tint.setHSL(0.28 + ((i % 5) - 2) * 0.012, 0.28, 0.28 + (i % 3) * 0.04);
-    canopyInst.setColorAt(i, tint);
-  });
-  trunkInst.castShadow = true;
-  canopyInst.castShadow = true;
-  trunkInst.computeBoundingSphere();
-  canopyInst.computeBoundingSphere();
-  if (canopyInst.instanceColor) canopyInst.instanceColor.needsUpdate = true;
-  group.add(trunkInst, canopyInst);
+  const placeCards = (coords: [number, number][], inst: THREE.InstancedMesh) => {
+    const places: { x: number; y: number; z: number; s: number }[] = [];
+    coords.forEach(([tx, tz], i) => {
+      const ty = getTerrainHeightAndSurface(tx, tz).height;
+      const sc = 0.85 + ((i * 37) % 10) * 0.04;
+      places.push({ x: tx, y: ty, z: tz, s: sc });
+      dummy.position.set(tx, ty, tz);
+      dummy.rotation.set(0, 0, 0);
+      dummy.scale.set(sc, sc, sc);
+      dummy.updateMatrix();
+      inst.setMatrixAt(i, dummy.matrix);
+      tint.setRGB(0.92 + (i % 3) * 0.03, 0.94, 0.9);
+      inst.setColorAt(i, tint);
+    });
+    inst.castShadow = false;
+    inst.frustumCulled = false;
+    inst.computeBoundingSphere();
+    if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
+    foliageBillboards.push({ mesh: inst, places });
+    group.add(inst);
+  };
+  placeCards(cabbageCoords, cabbageInst);
+  placeCards(macroCoords, macroInst);
 
   // Signature White-Painted Slatted Street Tree Guards & Saplings (from photo 1: Oamaru.N.Z.F.G.R.5747)
   const treeGuardCoords: [number, number][] = [
@@ -2271,17 +2401,19 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
     [-82, 7.9], [-68, 7.9], [-40, 7.9], [-10, 7.9], [6, 7.9], [36, 7.9], [62, 7.9],
   ];
   const whitePaintMat = track(new THREE.MeshStandardMaterial({ color: 0xede6d8, roughness: 0.78 }));
-  const saplingLeafMat = track(new THREE.MeshStandardMaterial({ color: 0x3b4f30, roughness: 0.88 }));
+  const saplingCardMat = cardMat(textures.cabbageTree);
   const guardPostGeo = track(new THREE.BoxGeometry(0.06, 1.55, 0.06));
   const guardRingGeo = track(new THREE.BoxGeometry(0.74, 0.07, 0.74));
   const saplingTrunkGeo = track(new THREE.CylinderGeometry(0.055, 0.085, 2.75, 6));
-  const saplingCrownGeo = track(new THREE.DodecahedronGeometry(0.88, 1));
+  const saplingCrownGeo = uprightCard(1.45, 2.9);
+  const saplingPlaces: { x: number; y: number; z: number; s: number }[] = [];
 
   const tgCount = treeGuardCoords.length;
   const guardPostsInst = new THREE.InstancedMesh(guardPostGeo, whitePaintMat, tgCount * 4);
   const guardTopInst = new THREE.InstancedMesh(guardRingGeo, whitePaintMat, tgCount);
   const saplingTrunkInst = new THREE.InstancedMesh(saplingTrunkGeo, trunkMat, tgCount);
-  const saplingCrownInst = new THREE.InstancedMesh(saplingCrownGeo, saplingLeafMat, tgCount);
+  const saplingCrownInst = new THREE.InstancedMesh(saplingCrownGeo, saplingCardMat, tgCount);
+  saplingCrownInst.name = 'sapling-cards';
 
   treeGuardCoords.forEach(([tx, tz], i) => {
     const ty = getTerrainHeightAndSurface(tx, tz, true).height;
@@ -2303,13 +2435,17 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
     saplingTrunkInst.setMatrixAt(i, dummy.matrix);
 
     const sc = 0.85 + (i % 4) * 0.12;
-    dummy.position.set(tx, ty + 3.05, tz);
-    dummy.scale.set(sc, sc * 1.15, sc);
+    saplingPlaces.push({ x: tx, y: ty + 1.7, z: tz, s: sc });
+    dummy.position.set(tx, ty + 1.7, tz);
+    dummy.rotation.set(0, 0, 0);
+    dummy.scale.set(sc, sc, sc);
     dummy.updateMatrix();
     saplingCrownInst.setMatrixAt(i, dummy.matrix);
   });
   guardPostsInst.castShadow = true;
-  saplingCrownInst.castShadow = true;
+  saplingCrownInst.castShadow = false;
+  saplingCrownInst.frustumCulled = false;
+  foliageBillboards.push({ mesh: saplingCrownInst, places: saplingPlaces });
   guardPostsInst.computeBoundingSphere();
   guardTopInst.computeBoundingSphere();
   saplingTrunkInst.computeBoundingSphere();
@@ -2380,7 +2516,22 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
 
   return {
     group,
-    update: (elapsedTime: number, timeHour = 12) => {
+    update: (elapsedTime: number, timeHour = 12, view?: THREE.Vector3) => {
+      if (view) {
+        for (let b = 0; b < foliageBillboards.length; b++) {
+          const batch = foliageBillboards[b];
+          for (let i = 0; i < batch.places.length; i++) {
+            const p = batch.places[i];
+            dummy.position.set(p.x, p.y, p.z);
+            dummy.rotation.set(0, Math.atan2(view.x - p.x, view.z - p.z), 0);
+            dummy.scale.set(p.s, p.s, p.s);
+            dummy.updateMatrix();
+            batch.mesh.setMatrixAt(i, dummy.matrix);
+          }
+          batch.mesh.instanceMatrix.needsUpdate = true;
+        }
+      }
+      harbour.setTime(elapsedTime);
       shipGroup.position.y = -1.08 + Math.sin(elapsedTime * 1.1) * 0.07;
       shipGroup.rotation.z = Math.sin(elapsedTime * 0.85) * 0.012;
       shipGroup.rotation.x = Math.cos(elapsedTime * 0.65) * 0.008;
@@ -2424,14 +2575,23 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
       }
     },
     getTrainPos: () => ({ x: currentTrainX, z: -52 }),
-    setAtmosphereVisuals: (wetness: number, snowCover: number, nightFactor: number) => {
-      cobbleMat.roughness = 0.78 - wetness * 0.56;
-      cobbleMat.metalness = 0.08 + wetness * 0.16;
-      macadamMat.roughness = 0.9 - wetness * 0.44;
+    setAtmosphereVisuals: (
+      wetness: number,
+      snowCover: number,
+      nightFactor: number,
+      skyColor: THREE.Color,
+      sunDir: THREE.Vector3,
+      sunColor: THREE.Color
+    ) => {
+      harbour.setLight(skyColor, sunColor, sunDir);
+      cobbleMat.roughness = 0.82 - wetness * 0.58;
+      cobbleMat.metalness = 0.02;
+      macadamMat.roughness = 0.92 - wetness * 0.5;
+      macadamMat.metalness = 0.02;
       wharfMat.roughness = 0.84 - wetness * 0.5;
       mudMat.roughness = 0.58 - wetness * 0.4;
-      potholePuddleMat.roughness = 0.42 - wetness * 0.34;
-      potholePuddleMat.metalness = 0.14 + wetness * 0.38;
+      potholePuddleMat.roughness = 0.36 - wetness * 0.22;
+      potholePuddleMat.metalness = 0.02;
 
       // Snow / winter frost accumulation across verges, roofs & road shoulders
       terrainMat.color.copy(cNormalTerrain).lerp(cSnowTerrain, snowCover * 0.78);
@@ -2439,8 +2599,12 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
       macadamMat.color.copy(cNormalRoad).lerp(cSnowRoad, snowCover * 0.62);
       cobbleMat.color.copy(cNormalRoad).lerp(cSnowRoad, snowCover * 0.45);
       ironRoofMat.color.copy(cNormalRoof).lerp(cSnowRoof, snowCover * 0.85);
-      canopyMat.color.setHex(0x3b5332).lerp(cSnowTerrain, snowCover * 0.45);
-      saplingLeafMat.color.setHex(0x3b4f30).lerp(cSnowTerrain, snowCover * 0.45);
+      cabbageMat.color.setHex(0xffffff).lerp(cSnowTerrain, snowCover * 0.5);
+      macrocarpaMat.color.setHex(0xffffff).lerp(cSnowTerrain, snowCover * 0.5);
+      saplingCardMat.color.setHex(0xffffff).lerp(cSnowTerrain, snowCover * 0.5);
+      const haloOn = nightFactor > 0.08;
+      haloMat.opacity = haloOn ? (nightFactor - 0.08) * 0.72 : 0;
+      for (let i = 0; i < lampHalos.length; i++) lampHalos[i].visible = haloOn;
 
       lampGlowMat.emissiveIntensity = 0.35 + nightFactor * 2.2;
       moleBeaconMat.emissiveIntensity = 0.35 + nightFactor * 2.4;
@@ -2464,6 +2628,7 @@ export function buildOamaruWorld(textures: TextureBundle, isSoftwareGl: boolean)
       }
     },
     dispose: () => {
+      harbour.dispose();
       disposables.forEach((d) => d.dispose());
     },
   };

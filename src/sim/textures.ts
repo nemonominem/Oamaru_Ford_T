@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import cabbageTreeUrl from '../assets/foliage/cabbage-tree.png';
+import macrocarpaUrl from '../assets/foliage/macrocarpa.png';
 
 export type SignStyle = 'goldleaf' | 'ghost' | 'painted' | 'roofsign';
 
@@ -19,11 +21,15 @@ export interface TextureBundle {
   posterCollage: THREE.CanvasTexture;
   cobbles: THREE.CanvasTexture;
   cobblesBump: THREE.CanvasTexture;
+  cobblesNormal: THREE.CanvasTexture;
   macadam: THREE.CanvasTexture;
   mud: THREE.CanvasTexture;
   wharfTimber: THREE.CanvasTexture;
   corrugatedIron: THREE.CanvasTexture;
   grass: THREE.CanvasTexture;
+  wornEarth: THREE.CanvasTexture;
+  cabbageTree: THREE.Texture;
+  macrocarpa: THREE.Texture;
   radiatorHoneycomb: THREE.CanvasTexture;
   clockFace: THREE.CanvasTexture;
   createSignTexture: (
@@ -53,6 +59,42 @@ function seededNoise(seed: number): () => number {
   };
 }
 
+function heightToNormalCanvas(heightCanvas: HTMLCanvasElement, strength: number): HTMLCanvasElement {
+  const w = heightCanvas.width;
+  const h = heightCanvas.height;
+  const src = heightCanvas.getContext('2d')!.getImageData(0, 0, w, h).data;
+  const sample = (x: number, y: number) => {
+    const xx = (x + w) % w;
+    const yy = (y + h) % h;
+    return src[(yy * w + xx) * 4] / 255;
+  };
+  const out = document.createElement('canvas');
+  out.width = w;
+  out.height = h;
+  const ctx = out.getContext('2d')!;
+  const img = ctx.createImageData(w, h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const dx = sample(x + 1, y) - sample(x - 1, y);
+      const dy = sample(x, y + 1) - sample(x, y - 1);
+      let nx = -dx * strength;
+      let ny = -dy * strength;
+      let nz = 1;
+      const len = Math.hypot(nx, ny, nz);
+      nx /= len;
+      ny /= len;
+      nz /= len;
+      const i = (y * w + x) * 4;
+      img.data[i] = (nx * 0.5 + 0.5) * 255;
+      img.data[i + 1] = (ny * 0.5 + 0.5) * 255;
+      img.data[i + 2] = (nz * 0.5 + 0.5) * 255;
+      img.data[i + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  return out;
+}
+
 function configureTexture(
   canvas: HTMLCanvasElement,
   repeatX: number,
@@ -73,7 +115,7 @@ function configureTexture(
 }
 
 export function createProceduralTextures(maxAnisotropy: number): TextureBundle {
-  const createdTextures: THREE.CanvasTexture[] = [];
+  const createdTextures: THREE.Texture[] = [];
 
   // 1. Oamaru Whitestone Ashlar Limestone + Relief Bump Map
   const limeCanvas = document.createElement('canvas');
@@ -536,9 +578,9 @@ export function createProceduralTextures(maxAnisotropy: number): TextureBundle {
   cobbleBumpCanvas.height = 512;
   const cbCtx = cobbleBumpCanvas.getContext('2d')!;
 
-  cCtx.fillStyle = '#3b3936';
+  cCtx.fillStyle = '#221e1b';
   cCtx.fillRect(0, 0, 512, 512);
-  cbCtx.fillStyle = '#202020';
+  cbCtx.fillStyle = '#141210';
   cbCtx.fillRect(0, 0, 512, 512);
 
   const randCob = seededNoise(409);
@@ -567,7 +609,9 @@ export function createProceduralTextures(maxAnisotropy: number): TextureBundle {
   }
   const cobbles = configureTexture(cobbleCanvas, 18, 18, maxAnisotropy, true);
   const cobblesBump = configureTexture(cobbleBumpCanvas, 18, 18, maxAnisotropy, false);
-  createdTextures.push(cobbles, cobblesBump);
+  const cobblesNormal = configureTexture(heightToNormalCanvas(cobbleBumpCanvas, 4.4), 18, 18, maxAnisotropy, false);
+  cobblesNormal.colorSpace = THREE.NoColorSpace;
+  createdTextures.push(cobbles, cobblesBump, cobblesNormal);
 
   // 8. Compacted Oamaru Limestone Macadam Road
   const macCanvas = document.createElement('canvas');
@@ -676,6 +720,48 @@ export function createProceduralTextures(maxAnisotropy: number): TextureBundle {
   }
   const grass = configureTexture(grassCanvas, 28, 28, maxAnisotropy, true);
   createdTextures.push(grass);
+
+  // Dry limestone verge: packed gravel, no grass blades, so road edges
+  // do not wear the same tussock print as the paddocks.
+  const wornCanvas = document.createElement('canvas');
+  wornCanvas.width = 512;
+  wornCanvas.height = 512;
+  const wornCtx = wornCanvas.getContext('2d')!;
+  wornCtx.fillStyle = '#b3a48c';
+  wornCtx.fillRect(0, 0, 512, 512);
+  const randWorn = seededNoise(1204);
+  for (let i = 0; i < 7000; i++) {
+    const x = randWorn() * 512;
+    const y = randWorn() * 512;
+    const sz = 1 + randWorn() * 4;
+    const shade = 138 + Math.floor(randWorn() * 70);
+    wornCtx.fillStyle = `rgba(${shade + 8},${shade - 4},${shade - 22},0.7)`;
+    wornCtx.fillRect(x, y, sz, sz);
+  }
+  wornCtx.strokeStyle = 'rgba(92, 78, 60, 0.35)';
+  wornCtx.lineWidth = 2;
+  for (let i = 0; i < 18; i++) {
+    wornCtx.beginPath();
+    wornCtx.moveTo(randWorn() * 512, 0);
+    wornCtx.lineTo(randWorn() * 512, 512);
+    wornCtx.stroke();
+  }
+  const wornEarth = configureTexture(wornCanvas, 1, 1, maxAnisotropy, true);
+  createdTextures.push(wornEarth);
+
+  const loadFoliageCard = (url: string): THREE.Texture => {
+    const tex = new THREE.TextureLoader().load(url);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = maxAnisotropy;
+    tex.magFilter = THREE.LinearFilter;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.wrapS = THREE.ClampToEdgeWrapping;
+    tex.wrapT = THREE.ClampToEdgeWrapping;
+    createdTextures.push(tex);
+    return tex;
+  };
+  const cabbageTree = loadFoliageCard(cabbageTreeUrl);
+  const macrocarpa = loadFoliageCard(macrocarpaUrl);
 
   // 13. Model T Brass Honeycomb Radiator Grille Texture
   const radCanvas = document.createElement('canvas');
@@ -967,11 +1053,15 @@ export function createProceduralTextures(maxAnisotropy: number): TextureBundle {
     posterCollage,
     cobbles,
     cobblesBump,
+    cobblesNormal,
     macadam,
     mud,
     wharfTimber,
     corrugatedIron,
     grass,
+    wornEarth,
+    cabbageTree,
+    macrocarpa,
     radiatorHoneycomb,
     clockFace,
     createSignTexture,

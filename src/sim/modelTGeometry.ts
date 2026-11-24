@@ -24,6 +24,7 @@ export interface ModelTRig {
   ammeterNeedle: THREE.Group;
   wiperPivot: THREE.Group;
   fenderPaint: THREE.MeshPhysicalMaterial;
+  fenderMud: { value: number };
   driverRig: KiwiDriverRig;
   pedals: {
     low: THREE.Mesh;
@@ -49,6 +50,7 @@ export function buildFordModelT(
   };
 
   const root = new THREE.Group();
+  root.name = 'model-t';
   const chassisGroup = new THREE.Group();
   root.add(chassisGroup);
 
@@ -72,6 +74,33 @@ export function buildFordModelT(
       clearcoatRoughness: 0.2,
     })
   );
+  const fenderMud = { value: 0 };
+  const fenderMudColor = new THREE.Color(0x4b3b27);
+  fenderPaint.onBeforeCompile = (shader) => {
+    shader.uniforms.uMudAmount = fenderMud;
+    shader.uniforms.uMudColor = { value: fenderMudColor };
+    shader.vertexShader = shader.vertexShader.replace(
+      '#include <common>',
+      '#include <common>\nvarying float vFenderY;'
+    ).replace(
+      '#include <begin_vertex>',
+      '#include <begin_vertex>\nvFenderY = position.y;'
+    );
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying float vFenderY;\nuniform float uMudAmount;\nuniform vec3 uMudColor;')
+      .replace(
+        '#include <color_fragment>',
+        `#include <color_fragment>
+float mudBand = 1.0 - smoothstep(0.42, 0.70, vFenderY);
+diffuseColor.rgb = mix(diffuseColor.rgb, uMudColor, clamp(uMudAmount, 0.0, 1.0) * mudBand);`
+      )
+      .replace(
+        '#include <roughnessmap_fragment>',
+        `#include <roughnessmap_fragment>
+roughnessFactor = mix(roughnessFactor, min(1.0, roughnessFactor + 0.55), clamp(uMudAmount, 0.0, 1.0) * mudBand);`
+      );
+  };
+  fenderPaint.customProgramCacheKey = () => 'fender-mud-band';
 
   const chassisSteel = track(
     new THREE.MeshStandardMaterial({
@@ -547,8 +576,36 @@ export function buildFordModelT(
   );
   const headlightBulbs: THREE.Mesh[] = [];
   const headlightCones: THREE.Mesh[] = [];
-  const coneGeo = track(new THREE.ConeGeometry(0.95, 11.5, 16, 1, true));
+  // ConeGeometry apex is +Y. rotateX(-π/2) sends +Y to −Z, so the lamp
+  // end is local z = −3.1 and the beam opens toward +Z (the bonnet).
+  const coneGeo = track(new THREE.ConeGeometry(0.55, 6.2, 14, 1, true));
   coneGeo.rotateX(-Math.PI / 2);
+  const coneMat = track(
+    new THREE.MeshBasicMaterial({
+      color: 0xffe7b0,
+      transparent: true,
+      opacity: 0,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    })
+  );
+  coneMat.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vBeamLocal;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvBeamLocal = position;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vBeamLocal;')
+      .replace(
+        '#include <opaque_fragment>',
+        `#include <opaque_fragment>
+float beamAlong = clamp((vBeamLocal.z + 3.1) / 6.2, 0.0, 1.0);
+float beamRadial = clamp(length(vBeamLocal.xy) / max(0.05, mix(0.06, 0.55, beamAlong)), 0.0, 1.0);
+float beamShaft = exp(-beamAlong * 1.15) * pow(1.0 - beamRadial, 1.45);
+gl_FragColor.a *= beamShaft;`
+      );
+  };
+  coneMat.customProgramCacheKey = () => 'headlight-beam';
 
   [-0.36, 0.36].forEach((hx, idx) => {
     const bucket = new THREE.Mesh(track(new THREE.CylinderGeometry(0.11, 0.08, 0.14, 16)), polishedBrass);
@@ -562,19 +619,9 @@ export function buildFordModelT(
     chassisGroup.add(lens);
     headlightBulbs.push(lens);
 
-    const coneMat = track(
-      new THREE.MeshBasicMaterial({
-        color: 0xffeab8,
-        transparent: true,
-        opacity: 0,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-        side: THREE.DoubleSide,
-      })
-    );
     const cone = new THREE.Mesh(coneGeo, coneMat);
-    cone.position.set(hx, 0.85, 1.46 + 5.75);
-    cone.rotation.x = 0.05;
+    cone.position.set(hx, 0.78, 1.46 + 3.1);
+    cone.rotation.x = 0.1;
     cone.visible = false;
     chassisGroup.add(cone);
     headlightCones.push(cone);
@@ -772,6 +819,7 @@ export function buildFordModelT(
     ammeterNeedle,
     wiperPivot,
     fenderPaint,
+    fenderMud,
     driverRig,
     pedals: {
       low: pedalLow,

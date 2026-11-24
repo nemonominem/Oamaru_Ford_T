@@ -34,6 +34,28 @@ function clamp(v: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, v));
 }
 
+/** A solid hit cancels the inward speed, keeps only a slight rebound, then scrubs pace. */
+function scrubSolidHit(
+  state: VehicleState,
+  vn: number,
+  nx: number,
+  nz: number,
+  opts: { threshold: number; divisor: number; floor: number; bounce: number; keep: number; yawDamp: number }
+): void {
+  if (vn >= 0) return;
+  const inbound = -vn;
+  if (inbound > opts.threshold) {
+    state.impactStrength = Math.max(state.impactStrength, clamp(inbound / opts.divisor, opts.floor, 1));
+  }
+  state.vx -= opts.bounce * vn * nx;
+  state.vz -= opts.bounce * vn * nz;
+  if (inbound > 1.65) {
+    state.vx *= opts.keep;
+    state.vz *= opts.keep;
+    state.yawRate *= opts.yawDamp;
+  }
+}
+
 function approach(current: number, target: number, rate: number, dt: number): number {
   const diff = target - current;
   const step = rate * dt;
@@ -206,7 +228,7 @@ export function stepVehiclePhysics(
   state.speedMph = state.speedMps * 2.23694;
 
   // 1. Ignition & Hand-cranking sequence
-  state.impactStrength = Math.max(0, state.impactStrength - dt * 2.5);
+  state.impactStrength = Math.max(0, state.impactStrength - dt * 1.55);
 
   if (!state.ignitionOn) {
     state.engineRunning = false;
@@ -530,13 +552,14 @@ export function stepVehiclePhysics(
       state.x += nx * clampedPen;
       state.z += nz * clampedPen;
       const vn = state.vx * nx + state.vz * nz;
-      if (vn < 0) {
-        if (vn < -1.1) {
-          state.impactStrength = Math.max(state.impactStrength, clamp(Math.abs(vn) / 6, 0.2, 1.0));
-        }
-        state.vx -= 1.25 * vn * nx;
-        state.vz -= 1.25 * vn * nz;
-      }
+      scrubSolidHit(state, vn, nx, nz, {
+        threshold: 0.8,
+        divisor: 3.1,
+        floor: 0.4,
+        bounce: 1.05,
+        keep: 0.5,
+        yawDamp: 0.42,
+      });
     }
   }
 
@@ -555,27 +578,36 @@ export function stepVehiclePhysics(
       state.x += nx * pen;
       state.z += nz * pen;
       const vn = state.vx * nx + state.vz * nz;
-      if (vn < 0) {
-        if (vn < -0.9) {
-          state.impactStrength = Math.max(state.impactStrength, clamp(Math.abs(vn) / 4.8, 0.22, 0.95));
-        }
-        state.vx -= 1.2 * vn * nx;
-        state.vz -= 1.2 * vn * nz;
-      }
+      scrubSolidHit(state, vn, nx, nz, {
+        threshold: 0.7,
+        divisor: 3.3,
+        floor: 0.34,
+        bounce: 1.08,
+        keep: 0.7,
+        yawDamp: 0.72,
+      });
     }
   }
 
   state.distanceDrivenMiles += Math.hypot(state.x - prevX, state.z - prevZ) * 0.000621371;
 
-  // Mud & dust accumulation on fenders/running boards
-  if (state.speedMps > 1.0 && (state.currentSurface === 'mud' || state.currentSurface === 'grass')) {
+  // Dust on the sills. Dry macadam and cobbles lay it on with distance.
+  // Standing water washes it off. The shader keeps it on the lower body.
+  const onDustySurface =
+    state.currentSurface === 'mud' ||
+    state.currentSurface === 'grass' ||
+    state.currentSurface === 'macadam' ||
+    state.currentSurface === 'cobbles';
+  if (state.speedMps > 1.0 && env.wetness < 0.35 && onDustySurface) {
+    const rate =
+      state.currentSurface === 'mud' ? 0.15 : state.currentSurface === 'grass' ? 0.05 : 0.028;
     state.mudAccumulation = clamp(
-      state.mudAccumulation + dt * (state.currentSurface === 'mud' ? 0.15 : 0.05) * clamp(state.speedMps / 4, 0.3, 1.4),
+      state.mudAccumulation + dt * rate * clamp(state.speedMps / 4, 0.3, 1.4),
       0,
       1
     );
-  } else if (env.weather === 'rainy') {
-    state.mudAccumulation = clamp(state.mudAccumulation - dt * 0.08, 0, 1);
+  } else if (env.wetness > 0.45) {
+    state.mudAccumulation = clamp(state.mudAccumulation - dt * (0.12 + env.wetness * 0.2), 0, 1);
   }
 
   // Courtesy recovers very gradually during calm, safe street driving

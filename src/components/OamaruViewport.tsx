@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { ModelTAudioEngine } from '../sim/audio';
 import { computeAmbientTempC, getSeasonClimateInfo, pickLikelyWeather } from '../sim/climate';
 import {
@@ -32,6 +31,8 @@ import {
   pickScoldingLine,
 } from '../sim/streetVoices';
 import { WORLD_COLLIDERS, getTerrainHeightAndSurface } from '../sim/terrain';
+import { installHeightFog } from '../sim/heightFog';
+import { createOutdoorSky } from '../sim/outdoorSky';
 import { createProceduralTextures } from '../sim/textures';
 import { CameraMode, ControlMode, EnvironmentState, VehicleControls, VehicleState } from '../sim/types';
 import { MinimapOverlay } from './MinimapOverlay';
@@ -285,8 +286,14 @@ const _cSkyCurrent = new THREE.Color();
 const _cSunCurrent = new THREE.Color();
 const _cHemiSky = new THREE.Color();
 const _cHemiGround = new THREE.Color();
-const _cFenderClean = new THREE.Color(0x121315);
-const _cFenderMud = new THREE.Color(0x4b3b27);
+const _cZenithDay = new THREE.Color(0x6f97c4);
+const _cHorizonDay = new THREE.Color(0xd7e6ef);
+const _cZenithDusk = new THREE.Color(0x243656);
+const _cHorizonApricot = new THREE.Color(0xf0c09a);
+const _cHorizonNight = new THREE.Color(0x2c3548);
+const _cGroundDay = new THREE.Color(0x6d624c);
+const _sunDir = new THREE.Vector3();
+const _trackTint = new THREE.Color();
 
 function detectSoftwareGl(): boolean {
   try {
@@ -329,6 +336,7 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
   onTelemetryTick,
 }) => {
   const mountRef = useRef<HTMLDivElement | null>(null);
+  const vignetteRef = useRef<HTMLDivElement | null>(null);
   const onTelemetryRef = useRef(onTelemetryTick);
   onTelemetryRef.current = onTelemetryTick;
   const onErrandUpdateRef = useRef(onErrandUpdate);
@@ -376,7 +384,7 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
     renderer.setPixelRatio(isSoftwareGl ? 1 : Math.min(window.devicePixelRatio, 2));
     renderer.setSize(container.clientWidth, container.clientHeight);
     renderer.shadowMap.enabled = !isSoftwareGl;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.shadowMap.type = THREE.PCFShadowMap;
 
     const canvas = renderer.domElement;
     canvas.style.display = 'block';
@@ -400,18 +408,19 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
     scene.background = bgColor;
     scene.fog = fog;
 
+    const sky = createOutdoorSky();
+    scene.add(sky.dome);
     const pmremGenerator = new THREE.PMREMGenerator(renderer);
-    const envTex = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
+    let envTex = pmremGenerator.fromScene(sky.captureScene, 0.04).texture;
     scene.environment = envTex;
-    pmremGenerator.dispose();
+    let envKey = '';
 
     const camera = new THREE.PerspectiveCamera(
-      cameraModeRef.current === 'orbit' ? 46 : 64,
+      cameraModeRef.current === 'orbit' ? 46 : 50,
       container.clientWidth / Math.max(1, container.clientHeight),
       0.12,
       520
     );
-
     const orbitControls = new OrbitControls(camera, canvas);
     orbitControls.enableDamping = !isSoftwareGl;
     orbitControls.dampingFactor = 0.08;
@@ -428,15 +437,16 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
     sunLight.castShadow = !isSoftwareGl;
     sunLight.shadow.mapSize.width = 2048;
     sunLight.shadow.mapSize.height = 2048;
-    sunLight.shadow.camera.near = 10;
-    sunLight.shadow.camera.far = 220;
-    const d = 64;
+    sunLight.shadow.camera.near = 1;
+    sunLight.shadow.camera.far = 160;
+    const d = 28;
     sunLight.shadow.camera.left = -d;
     sunLight.shadow.camera.right = d;
     sunLight.shadow.camera.top = d;
     sunLight.shadow.camera.bottom = -d;
     sunLight.shadow.bias = -0.0005;
     sunLight.shadow.normalBias = 0.02;
+    sunLight.shadow.camera.updateProjectionMatrix();
     scene.add(sunLight);
     scene.add(sunLight.target);
 
@@ -482,9 +492,9 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
     const trackGeo = new THREE.PlaneGeometry(0.18, 0.56);
     trackGeo.rotateX(-Math.PI / 2);
     const trackMat = new THREE.MeshBasicMaterial({
-      color: 0x3b3022,
+      color: 0xffffff,
       transparent: true,
-      opacity: 0.42,
+      opacity: 0.5,
       depthWrite: false,
       polygonOffset: true,
       polygonOffsetFactor: -1,
@@ -493,10 +503,13 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
     trackInst.frustumCulled = false;
     _trackDummy.position.set(0, -50, 0);
     _trackDummy.updateMatrix();
+    _trackTint.set(0x3b3022);
     for (let i = 0; i < trackCount; i++) {
       trackInst.setMatrixAt(i, _trackDummy.matrix);
+      trackInst.setColorAt(i, _trackTint);
     }
     trackInst.instanceMatrix.needsUpdate = true;
+    if (trackInst.instanceColor) trackInst.instanceColor.needsUpdate = true;
     scene.add(trackInst);
     let trackCursor = 0;
     let lastTrackStampX = vehicleStateRef.current.x;
@@ -629,6 +642,8 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
       initState.z + _lookOffsetVec.z
     );
     camera.lookAt(_currentLookAt);
+
+    installHeightFog(scene);
 
     if (!isSoftwareGl) {
       renderer.compile(scene, camera);
@@ -1000,8 +1015,11 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
         _lookOffsetVec.set(0, 1.15, 16.0).applyQuaternion(_carQuat);
       } else {
         const speedPullback = Math.min(1.4, st.speedMps * 0.08);
-        _offsetVec.set(0, 2.4 + speedPullback * 0.25, -5.8 - speedPullback).applyQuaternion(_carQuat);
-        _lookOffsetVec.set(0, 1.05, 3.2).applyQuaternion(_carQuat);
+        // Car local +z is the bonnet, the same forward physics uses
+        // (yaw 0 keeps local +z on world +z). Chase sits on local −z
+        // and looks toward local +z; lookAt then aims the camera's own −z.
+        _offsetVec.set(0, 2.05 + speedPullback * 0.18, -6.7 - speedPullback).applyQuaternion(_carQuat);
+        _lookOffsetVec.set(0, 0.92, 4.4).applyQuaternion(_carQuat);
       }
 
       _desiredCamPos.set(st.x + _offsetVec.x, Math.max(st.y + 0.5, st.y + _offsetVec.y), st.z + _offsetVec.z);
@@ -1025,7 +1043,8 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
       }
 
       targetCam.lookAt(lookVec);
-      const targetFov = modeToUse === 'cockpit' ? 64 : 55 + Math.min(7, st.speedMph * 0.18);
+      const targetFov =
+        modeToUse === 'cockpit' ? 64 : modeToUse === 'bonnet' ? 52 : 50 + Math.min(3, st.speedMph * 0.06);
       if (snap || Math.abs(targetCam.fov - targetFov) > 0.05) {
         targetCam.fov = snap ? targetFov : THREE.MathUtils.damp(targetCam.fov, targetFov, 5, dt);
         targetCam.updateProjectionMatrix();
@@ -1305,11 +1324,18 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
           state.z += nz * pen;
           const vn = state.vx * nx + state.vz * nz;
           if (vn < 0) {
-            if (vn < -1.1) {
-              state.impactStrength = Math.max(state.impactStrength, Math.min(1, Math.abs(vn) / 5));
+            const inbound = -vn;
+            if (inbound > 0.8) {
+              state.impactStrength = Math.max(state.impactStrength, Math.min(1, Math.max(0.38, inbound / 3.1)));
             }
-            state.vx -= 1.2 * vn * nx;
-            state.vz -= 1.2 * vn * nz;
+            state.vx -= 1.06 * vn * nx;
+            state.vz -= 1.06 * vn * nz;
+            if (inbound > 1.65) {
+              const keep = inbound > 4.2 ? 0.46 : 0.58;
+              state.vx *= keep;
+              state.vz *= keep;
+              state.yawRate *= 0.55;
+            }
           }
         }
       }
@@ -1366,7 +1392,7 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
         surface: state.currentSurface,
       });
 
-      world.update(elapsed, env.timeHour);
+      world.update(elapsed, env.timeHour, camera.position);
       const trainPos = world.getTrainPos();
       state.racePosition = traffic.getRacePosition(state.x, state.z, state.lapCount);
 
@@ -1592,7 +1618,7 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
       }
 
       let badReason: BadDrivingReason | null = null;
-      if (state.impactStrength > 0.28) {
+      if (state.impactStrength > 0.22) {
         badReason = 'impact';
       } else if (spatialHints.nearestCrowdDist < 23 && state.speedMph > 21) {
         badReason = 'speeding';
@@ -1617,7 +1643,7 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
       if (badReason && now - lastScoldAt > 3800) {
         lastScoldAt = now;
         const penalty =
-          badReason === 'impact' ? 8 : badReason === 'livestock' ? 6 : badReason === 'offroad' || badReason === 'skid' ? 4 : 3;
+          badReason === 'impact' ? 14 : badReason === 'livestock' ? 6 : badReason === 'offroad' || badReason === 'skid' ? 4 : 3;
         state.courtesyScore = Math.max(0, state.courtesyScore - penalty);
 
         scoldCursor += 1;
@@ -1698,22 +1724,36 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
       const duskFactor = THREE.MathUtils.clamp(1 - Math.abs(sunSin) * 2.8, 0, 1);
       const nightFactor = THREE.MathUtils.clamp((-sunSin + 0.12) * 1.9, 0, 1);
 
-      _cSkyCurrent.copy(_cNightSky).lerp(_cDaySky, dayFactor);
+      sky.zenith.copy(_cNightSky).lerp(_cZenithDay, dayFactor);
+      sky.horizon.copy(_cHorizonDay);
       if (duskFactor > 0.05) {
-        _cSkyCurrent.lerp(_cDuskSky, duskFactor * 0.72);
+        sky.zenith.lerp(_cZenithDusk, duskFactor * 0.55);
+        sky.horizon.lerp(_cDuskSky, duskFactor * 0.72);
+        sky.horizon.lerp(_cHorizonApricot, duskFactor * 0.28);
       }
-      if (env.weather === 'cloudy') {
-        _cSkyCurrent.lerp(_cCloudySky, 0.56 * (1 - nightFactor * 0.6));
-      } else if (env.weather === 'rainy') {
-        _cSkyCurrent.lerp(_cRainSky, 0.66 * (1 - nightFactor * 0.65));
-      } else if (env.weather === 'snowy') {
-        _cSkyCurrent.lerp(_cSnowSky, 0.72 * (1 - nightFactor * 0.72));
-      } else if (env.weather === 'windy') {
-        _cSkyCurrent.lerp(_cWindSky, 0.38 * (1 - nightFactor * 0.65));
+      sky.zenith.lerp(_cNightSky, nightFactor);
+      sky.horizon.lerp(_cHorizonNight, nightFactor);
+      sky.ground.copy(_cGroundDay).lerp(_cNightSky, nightFactor * 0.85);
+      const weatherSky =
+        env.weather === 'cloudy'
+          ? _cCloudySky
+          : env.weather === 'rainy'
+            ? _cRainSky
+            : env.weather === 'snowy'
+              ? _cSnowSky
+              : env.weather === 'windy'
+                ? _cWindSky
+                : null;
+      if (weatherSky) {
+        const pull = env.weather === 'windy' ? 0.35 : 0.62;
+        sky.zenith.lerp(weatherSky, pull * (1 - nightFactor * 0.45));
+        sky.horizon.lerp(weatherSky, pull * 0.72 * (1 - nightFactor * 0.45));
       }
+      sky.night.value = nightFactor;
+      _cSkyCurrent.copy(sky.horizon);
 
-      bgColor.copy(_cSkyCurrent);
-      fog.color.copy(_cSkyCurrent);
+      bgColor.copy(sky.horizon);
+      fog.color.copy(sky.horizon);
 
       const targetFogDensity =
         env.weather === 'snowy'
@@ -1731,8 +1771,15 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
       const maxSolarElevHeight = 62 + seasonalCos * 26;
       const sunHeight = Math.max(14, Math.abs(sunSin) * maxSolarElevHeight);
       const sunDirX = Math.cos(sunAngle) * 65;
+      const shadowLead = 12;
       sunLight.position.set(state.x + sunDirX, sunHeight, state.z - 32);
-      sunLight.target.position.set(state.x, state.y, state.z);
+      sunLight.target.position.set(
+        state.x + Math.sin(state.yaw) * shadowLead,
+        state.y,
+        state.z + Math.cos(state.yaw) * shadowLead
+      );
+      _sunDir.set(sunDirX, sunHeight, -32).normalize();
+      sky.sunDir.copy(_sunDir);
 
       _cSunCurrent.copy(_cDaySun);
       if (duskFactor > 0.05) _cSunCurrent.lerp(_cDuskSun, duskFactor * 0.85);
@@ -1757,9 +1804,20 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
       hemiLight.groundColor.copy(_cHemiGround);
       hemiLight.intensity = THREE.MathUtils.lerp(0.75, 0.28, nightFactor);
 
-      renderer.toneMappingExposure = THREE.MathUtils.lerp(1.08, 0.88, nightFactor);
+      renderer.toneMappingExposure = THREE.MathUtils.lerp(1.08, 0.5, nightFactor);
 
-      world.setAtmosphereVisuals(env.wetness, env.snowCover, nightFactor);
+      sky.sun.copy(_cSunCurrent);
+      const timeBucket = nightFactor > 0.72 ? 'n' : duskFactor > 0.4 ? 'd' : dayFactor > 0.8 ? 'day' : 't';
+      const nextEnvKey = `${env.weather}|${timeBucket}|${Math.round(sunAngle * 3)}`;
+      if (nextEnvKey !== envKey && !(isSoftwareGl && envKey !== '')) {
+        envKey = nextEnvKey;
+        const nextEnv = pmremGenerator.fromScene(sky.captureScene, 0.04).texture;
+        scene.environment = nextEnv;
+        envTex.dispose();
+        envTex = nextEnv;
+      }
+
+      world.setAtmosphereVisuals(env.wetness, env.snowCover, nightFactor, sky.horizon, _sunDir, _cSunCurrent);
 
       const autoLamps = nightFactor > 0.32 || env.weather === 'rainy' || env.weather === 'snowy';
       const lightsOn = headlightsManualRef.current !== null ? headlightsManualRef.current : autoLamps;
@@ -1884,8 +1942,7 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
         frameDt
       );
 
-      modelT.fenderPaint.color.copy(_cFenderClean).lerp(_cFenderMud, state.mudAccumulation * 0.82);
-      modelT.fenderPaint.roughness = 0.28 + state.mudAccumulation * 0.6;
+      modelT.fenderMud.value = state.mudAccumulation;
 
       // Magneto-driven headlamp output scales with engine RPM
       const magnetoFactor = state.engineRunning
@@ -1895,29 +1952,47 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
           : 0.08;
       modelT.headlights[0].intensity = lightsOn ? 28 * magnetoFactor : 0;
       modelT.headlights[1].intensity = lightsOn ? 28 * magnetoFactor : 0;
+      const beam =
+        lightsOn && nightFactor > 0.2 ? (nightFactor - 0.2) * 0.55 * magnetoFactor : 0;
+      for (let hi = 0; hi < modelT.headlightCones.length; hi++) {
+        const cone = modelT.headlightCones[hi];
+        (cone.material as THREE.MeshBasicMaterial).opacity = beam;
+        cone.visible = beam > 0.03;
+      }
       const bulbMat = modelT.headlightBulbs[0].material as THREE.MeshStandardMaterial;
       bulbMat.emissiveIntensity = lightsOn ? 0.4 + 2.2 * magnetoFactor : 0.25;
 
       // Stamp tire track decals on mud, grass & snowy roads
       const stampDist = Math.hypot(state.x - lastTrackStampX, state.z - lastTrackStampZ);
-      if (
-        state.speedMps > 1.2 &&
-        stampDist >= 0.56 &&
-        (state.currentSurface === 'mud' || state.currentSurface === 'grass' || env.snowCover > 0.22)
-      ) {
+      const leavesARut =
+        state.currentSurface === 'mud' ||
+        state.currentSurface === 'grass' ||
+        state.currentSurface === 'macadam' ||
+        state.currentSurface === 'cobbles' ||
+        env.snowCover > 0.22;
+      if (state.speedMps > 1.2 && stampDist >= 0.5 && leavesARut) {
         lastTrackStampX = state.x;
         lastTrackStampZ = state.z;
-        trackMat.color.setHex(env.snowCover > 0.35 ? 0x626b73 : 0x3b3022);
+        if (env.snowCover > 0.35) _trackTint.setHex(0x626b73);
+        else if (state.currentSurface === 'cobbles') _trackTint.setHex(env.wetness > 0.45 ? 0x1c1916 : 0x3a342e);
+        else if (state.currentSurface === 'mud') _trackTint.setHex(0x3b3022);
+        else if (state.currentSurface === 'grass') _trackTint.setHex(0x3e4a30);
+        else if (env.wetness > 0.45) _trackTint.setHex(0x4a4034);
+        else _trackTint.setHex(0xc6b394);
+        const stretch = THREE.MathUtils.clamp(stampDist / 0.5, 1.15, 2.8);
         [-0.71, 0.71].forEach((lx) => {
           _rearWheelPos.set(lx, 0, -1.27).applyQuaternion(modelT.root.quaternion);
           _trackDummy.position.set(state.x + _rearWheelPos.x, state.y + 0.028, state.z + _rearWheelPos.z);
           _trackDummy.rotation.set(0, state.yaw, 0);
-          _trackDummy.scale.set(1, 1, 1);
+          _trackDummy.scale.set(1, 1, stretch);
           _trackDummy.updateMatrix();
-          trackInst.setMatrixAt(trackCursor % trackCount, _trackDummy.matrix);
+          const slot = trackCursor % trackCount;
+          trackInst.setMatrixAt(slot, _trackDummy.matrix);
+          trackInst.setColorAt(slot, _trackTint);
           trackCursor++;
         });
         trackInst.instanceMatrix.needsUpdate = true;
+        if (trackInst.instanceColor) trackInst.instanceColor.needsUpdate = true;
       }
 
       // Radiator boiling steam puffs
@@ -2143,8 +2218,8 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
           orbitControls.update();
           clampCameraOutsideBuildings(camera.position, orbitControls.target);
           camera.lookAt(orbitControls.target);
-          if (Math.abs(camera.fov - 52) > 0.1) {
-            camera.fov = THREE.MathUtils.damp(camera.fov, 52, 4, frameDt);
+          if (Math.abs(camera.fov - 46) > 0.1) {
+            camera.fov = THREE.MathUtils.damp(camera.fov, 46, 4, frameDt);
             camera.updateProjectionMatrix();
           }
         } else {
@@ -2172,6 +2247,7 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
           !(camMode === 'orbit' && (manualOrbitDragging || elapsed < manualOrbitResumeAt));
 
         if (sameAsMain) {
+          sky.dome.position.copy(camera.position);
           renderer.render(scene, camera);
           recCtx.drawImage(canvas, 0, 0, recCanvas.width, recCanvas.height);
         } else {
@@ -2183,10 +2259,12 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
             updateStandardCameraPose(recCamera, _recLookAt, recMode, state, frameDt, recSwitched);
           }
           modelT.driverRig.setFirstPersonMode(recMode === 'cockpit');
+          sky.dome.position.copy(recCamera.position);
           renderer.render(scene, recCamera);
           recCtx.drawImage(canvas, 0, 0, recCanvas.width, recCanvas.height);
 
           modelT.driverRig.setFirstPersonMode(mainFirstPerson);
+          sky.dome.position.copy(camera.position);
           renderer.render(scene, camera);
         }
 
@@ -2201,7 +2279,11 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
           });
         }
       } else {
+        sky.dome.position.copy(camera.position);
         renderer.render(scene, camera);
+      }
+      if (vignetteRef.current) {
+        vignetteRef.current.style.opacity = camMode === 'cockpit' ? '1' : '0';
       }
 
       if (now - lastUiPush > 50) {
@@ -2292,6 +2374,8 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
       contactShadowMat.dispose();
       contactShadowTex.dispose();
       envTex.dispose();
+      pmremGenerator.dispose();
+      sky.dispose();
       passengers.dispose();
       traffic.dispose();
       modelT.dispose();
@@ -2356,6 +2440,15 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
   return (
     <div className="relative h-full w-full bg-[#1a1815] touch-none">
       <div ref={mountRef} className="absolute inset-0 h-full w-full touch-none" />
+      <div
+        ref={vignetteRef}
+        className="pointer-events-none absolute inset-0 z-10"
+        style={{
+          opacity: 0,
+          background:
+            'radial-gradient(ellipse at center, transparent 46%, rgba(16, 12, 8, 0.5) 100%)',
+        }}
+      />
 
       {dialogue && !showArthurTourCard && (
         <div
