@@ -99,6 +99,7 @@ export class ModelTAudioEngine {
   private initialized = false;
   private cachedVoices: SpeechSynthesisVoice[] = [];
   private voicesListenerBound = false;
+  private voicesLoaded = false;
 
   private refreshVoices = (): void => {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
@@ -106,6 +107,7 @@ export class ModelTAudioEngine {
       const list = window.speechSynthesis.getVoices();
       if (list && list.length > 0) {
         this.cachedVoices = list;
+        this.voicesLoaded = true;
       }
     } catch {
       // ignore restricted environments
@@ -118,10 +120,13 @@ export class ModelTAudioEngine {
     }
     this.voicesListenerBound = true;
     this.refreshVoices();
-    try {
-      window.speechSynthesis.addEventListener?.('voiceschanged', this.refreshVoices);
-    } catch {
-      // ignore if speechSynthesis event listener unavailable
+    // If voices haven't loaded yet, don't mark as loaded so we can retry on next speak attempt
+    if (!this.voicesLoaded) {
+      try {
+        window.speechSynthesis.addEventListener?.('voiceschanged', this.refreshVoices);
+      } catch {
+        // ignore if speechSynthesis event listener unavailable
+      }
     }
   }
 
@@ -717,59 +722,59 @@ export class ModelTAudioEngine {
     const norm = role.toLowerCase();
     if (norm === 'lady') {
       return {
-        voice: pickFrom(femaleVoices, 0),
+        voice: pickFrom(femaleVoices, 0) ?? pickFrom(sortedAll, 0),
         pitch: clampPitch((isScolding ? 1.13 : 1.07) + jitter()),
-        rate: clampRate((isScolding ? 1.03 : 0.96) + jitter() * 0.5),
+        rate: clampRate(Math.min((isScolding ? 1.03 : 0.96) + jitter() * 0.5, 0.98)),
       };
     }
     if (norm === 'schoolboy') {
       const youthList = femaleVoices.length > 1 ? [femaleVoices[1], femaleVoices[0]] : sortedAll;
       return {
-        voice: pickFrom(youthList, 0),
+        voice: pickFrom(youthList, 0) ?? pickFrom(sortedAll, 0),
         pitch: clampPitch(1.15 + jitter()),
-        rate: clampRate(1.05 + jitter() * 0.5),
+        rate: clampRate(Math.min(1.05 + jitter() * 0.5, 0.98)),
       };
     }
     if (norm === 'newsboy') {
       const youthList = femaleVoices.length > 0 ? femaleVoices : sortedAll;
       return {
-        voice: pickFrom(youthList, 1),
+        voice: pickFrom(youthList, 1) ?? pickFrom(sortedAll, 0),
         pitch: clampPitch(1.12 + jitter()),
-        rate: clampRate(1.06 + jitter() * 0.5),
+        rate: clampRate(Math.min(1.06 + jitter() * 0.5, 0.98)),
       };
     }
     if (norm === 'captain') {
       return {
-        voice: pickFrom(maleVoices, 0),
+        voice: pickFrom(maleVoices, 0) ?? pickFrom(sortedAll, 0),
         pitch: clampPitch(0.86 + jitter()),
-        rate: clampRate(0.92 + jitter() * 0.5),
+        rate: clampRate(Math.min(0.92 + jitter() * 0.5, 0.98)),
       };
     }
     if (norm === 'constable') {
       return {
-        voice: pickFrom(maleVoices, 1),
+        voice: pickFrom(maleVoices, 1) ?? pickFrom(sortedAll, 0),
         pitch: clampPitch(0.9 + jitter()),
-        rate: clampRate((isScolding ? 1.02 : 0.95) + jitter() * 0.5),
+        rate: clampRate(Math.min((isScolding ? 1.02 : 0.95) + jitter() * 0.5, 0.98)),
       };
     }
     if (norm === 'dockworker') {
       return {
-        voice: pickFrom(maleVoices, 2),
+        voice: pickFrom(maleVoices, 2) ?? pickFrom(sortedAll, 0),
         pitch: clampPitch(0.92 + jitter()),
-        rate: clampRate((isScolding ? 1.04 : 0.98) + jitter() * 0.5),
+        rate: clampRate(Math.min((isScolding ? 1.04 : 0.98) + jitter() * 0.5, 0.98)),
       };
     }
     if (norm === 'mechanic') {
       return {
-        voice: pickFrom(maleVoices, 3),
+        voice: pickFrom(maleVoices, 3) ?? pickFrom(sortedAll, 0),
         pitch: clampPitch(0.97 + jitter()),
-        rate: clampRate(0.99 + jitter() * 0.5),
+        rate: clampRate(Math.min(0.99 + jitter() * 0.5, 0.98)),
       };
     }
     return {
-      voice: pickFrom(maleVoices, 4),
+      voice: pickFrom(maleVoices, 4) ?? pickFrom(sortedAll, 0),
       pitch: clampPitch((isScolding ? 1.03 : 0.99) + jitter()),
-      rate: clampRate((isScolding ? 1.02 : 0.96) + jitter() * 0.5),
+      rate: clampRate(Math.min((isScolding ? 1.02 : 0.96) + jitter() * 0.5, 0.98)),
     };
   }
 
@@ -798,7 +803,12 @@ export class ModelTAudioEngine {
         this.playConstableWhistleCue(volumeScale);
       }
 
-      const voices = synth.getVoices();
+      // Retry loading voices if cache is still empty (voices may load asynchronously)
+      let voices = synth.getVoices();
+      if (voices.length === 0 && !this.voicesLoaded) {
+        this.bindVoiceListener();
+        voices = synth.getVoices();
+      }
       const activeVoices = voices.length > 0 ? voices : this.cachedVoices;
       const profile = this.resolveCharacterSpeechSpec(role, isScolding, activeVoices);
 
@@ -806,9 +816,13 @@ export class ModelTAudioEngine {
       if (profile.voice) {
         utt.voice = profile.voice;
         utt.lang = profile.voice.lang;
+      } else {
+        // Fallback to a sensible regional default so we never speak with an undefined/robotic voice
+        utt.lang = 'en-NZ';
       }
       utt.pitch = profile.pitch;
-      utt.rate = profile.rate;
+      // Slightly slower, more deliberate rate for period-appropriate speech
+      utt.rate = Math.min(profile.rate, 0.98);
       utt.volume = Math.max(0.38, Math.min(1.0, volumeScale));
       synth.speak(utt);
     } catch {

@@ -1553,18 +1553,18 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
 
   const buildCat = (mat: THREE.Material): { group: THREE.Group; tail: THREE.Object3D } => {
     const cat = new THREE.Group();
-    const body = new THREE.Mesh(track(new THREE.BoxGeometry(0.2, 0.16, 0.4)), mat);
+    const body = new THREE.Mesh(track(new THREE.BoxGeometry(0.2, 0.16, 0.4, 2, 2, 2)), mat);
     body.position.set(0, 0.22, 0);
-    const head = new THREE.Mesh(track(new THREE.BoxGeometry(0.16, 0.14, 0.15)), mat);
+    const head = new THREE.Mesh(track(new THREE.BoxGeometry(0.16, 0.14, 0.15, 2, 2, 2)), mat);
     head.position.set(0, 0.32, 0.24);
-    const earGeo = track(new THREE.ConeGeometry(0.035, 0.07, 4));
+    const earGeo = track(new THREE.ConeGeometry(0.035, 0.07, 8));
     const earL = new THREE.Mesh(earGeo, mat);
     earL.position.set(-0.045, 0.42, 0.24);
     const earR = new THREE.Mesh(earGeo, mat);
     earR.position.set(0.045, 0.42, 0.24);
     const tailPivot = new THREE.Group();
     tailPivot.position.set(0, 0.28, -0.2);
-    const tail = new THREE.Mesh(track(new THREE.CylinderGeometry(0.018, 0.028, 0.28, 5)), mat);
+    const tail = new THREE.Mesh(track(new THREE.CylinderGeometry(0.018, 0.028, 0.28, 10)), mat);
     tail.position.set(0, 0.1, -0.06);
     tail.rotation.x = 0.7;
     tailPivot.add(tail);
@@ -1603,26 +1603,26 @@ export function buildOamaruTraffic(): OamaruTrafficHandle {
 
   const buildGoose = (): { group: THREE.Group; leftWing: THREE.Object3D; rightWing: THREE.Object3D; neck: THREE.Object3D } => {
     const goose = new THREE.Group();
-    const body = new THREE.Mesh(track(new THREE.SphereGeometry(0.16, 8, 6)), gooseBodyMat);
+    const body = new THREE.Mesh(track(new THREE.SphereGeometry(0.16, 16, 12)), gooseBodyMat);
     body.scale.set(1, 0.72, 1.45);
     body.position.set(0, 0.36, 0);
     const neck = new THREE.Group();
     neck.position.set(0, 0.42, 0.16);
-    const neckMesh = new THREE.Mesh(track(new THREE.CylinderGeometry(0.03, 0.04, 0.22, 6)), gooseBodyMat);
+    const neckMesh = new THREE.Mesh(track(new THREE.CylinderGeometry(0.03, 0.04, 0.22, 12)), gooseBodyMat);
     neckMesh.position.set(0, 0.1, 0.04);
     neckMesh.rotation.x = -0.5;
-    const head = new THREE.Mesh(track(new THREE.SphereGeometry(0.055, 7, 6)), gooseBodyMat);
+    const head = new THREE.Mesh(track(new THREE.SphereGeometry(0.055, 12, 10)), gooseBodyMat);
     head.position.set(0, 0.22, 0.1);
-    const beak = new THREE.Mesh(track(new THREE.ConeGeometry(0.02, 0.09, 5)), gooseFeetMat);
+    const beak = new THREE.Mesh(track(new THREE.ConeGeometry(0.02, 0.09, 8)), gooseFeetMat);
     beak.rotation.x = Math.PI / 2;
     beak.position.set(0, 0.21, 0.16);
     neck.add(neckMesh, head, beak);
-    const wingGeo = track(new THREE.BoxGeometry(0.05, 0.1, 0.22));
+    const wingGeo = track(new THREE.BoxGeometry(0.05, 0.1, 0.22, 1, 2, 4));
     const leftWing = new THREE.Mesh(wingGeo, gooseBodyMat);
     leftWing.position.set(0.14, 0.38, 0);
     const rightWing = new THREE.Mesh(wingGeo, gooseBodyMat);
     rightWing.position.set(-0.14, 0.38, 0);
-    const legGeo = track(new THREE.CylinderGeometry(0.012, 0.012, 0.18, 4));
+    const legGeo = track(new THREE.CylinderGeometry(0.012, 0.012, 0.18, 8));
     [-0.05, 0.05].forEach((lx) => {
       const leg = new THREE.Mesh(legGeo, gooseFeetMat);
       leg.position.set(lx, 0.1, 0.02);

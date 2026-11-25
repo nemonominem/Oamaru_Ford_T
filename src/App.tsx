@@ -553,6 +553,7 @@ export default function App() {
         resetTriggerRef={resetTriggerRef}
         recorderControlRef={recorderControlRef}
         startShieldOpen={startShieldOpen}
+        hasStartedOnce={hasStartedOnce}
         passengerHud={passengerHud}
         onPassengerHudChange={setPassengerHud}
         onPassengerAction={handlePassengerAction}

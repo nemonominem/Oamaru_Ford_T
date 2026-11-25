@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { Map as MapIcon, X } from 'lucide-react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { ChevronDown, ChevronUp, GripHorizontal, Map as MapIcon, X } from 'lucide-react';
 import { OAMARU_HISTORICAL_BUILDINGS } from '../sim/historicalBuildings';
 import { WaitingMapPoint } from '../sim/passengers';
 import { CIRCUIT_CHECKPOINTS, CIRCUIT_LOOP_POINTS, SIDE_STREET_BLOCKADES } from '../sim/terrain';
@@ -13,6 +13,7 @@ interface MinimapOverlayProps {
   waitingPassengers?: WaitingMapPoint[];
   passengerTarget?: { x: number; z: number; label: string; name: string } | null;
   errandTarget?: { x: number; z: number; label: string; isDropoff: boolean } | null;
+  hasStartedOnce?: boolean;
 }
 
 const VIEW_RADIUS = 135; // meters visible from center to edge
@@ -26,10 +27,33 @@ export const MinimapOverlay: React.FC<MinimapOverlayProps> = ({
   waitingPassengers = [],
   passengerTarget = null,
   errandTarget = null,
+  hasStartedOnce = false,
 }) => {
   const [closed, setClosed] = useState(() =>
     typeof window !== 'undefined' ? window.innerWidth < 768 : false
   );
+  const [collapsed, setCollapsed] = useState(false);
+  // Movable & Resizable Map Panel
+  const mapRef = useRef<HTMLDivElement | null>(null);
+  const [mapWidth, setMapWidth] = useState<number>(typeof window !== 'undefined' ? Math.min(214, window.innerWidth - 32) : 214);
+  const [mapHeight, setMapHeight] = useState<number>(250);
+  const [isDragging, setIsDragging] = useState(false);
+  const [isResizing, setIsResizing] = useState(false);
+
+  const dragStateRef = useRef<{
+    startX: number;
+    startY: number;
+    origLeft: number;
+    origTop: number;
+  } | null>(null);
+
+  const resizeStateRef = useRef<{
+    edge: 'right' | 'bottom';
+    startX: number;
+    startY: number;
+    origWidth: number;
+    origHeight: number;
+  } | null>(null);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -40,6 +64,44 @@ export const MinimapOverlay: React.FC<MinimapOverlayProps> = ({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  useEffect(() => {
+    const onPointerMove = (e: PointerEvent) => {
+      const rs = resizeStateRef.current;
+      if (rs) {
+        const dx = e.clientX - rs.startX;
+        const dy = e.clientY - rs.startY;
+        if (rs.edge === 'right') {
+          const maxW = Math.min(400, window.innerWidth - 40);
+          const minW = 140;
+          setMapWidth(Math.max(minW, Math.min(maxW, Math.round(rs.origWidth + dx))));
+        } else if (rs.edge === 'bottom') {
+          const maxH = Math.min(500, window.innerHeight - 40);
+          const minH = 120;
+          setMapHeight(Math.max(minH, Math.min(maxH, Math.round(rs.origHeight + dy))));
+        }
+        return;
+      }
+      const ds = dragStateRef.current;
+      if (!ds || !mapRef.current) return;
+      const dx = e.clientX - ds.startX;
+      const dy = e.clientY - ds.startY;
+      mapRef.current.style.left = `${Math.max(8, ds.origLeft + dx)}px`;
+      mapRef.current.style.top = `${Math.max(8, ds.origTop + dy)}px`;
+    };
+    const onPointerUp = () => {
+      resizeStateRef.current = null;
+      dragStateRef.current = null;
+      setIsResizing(false);
+      setIsDragging(false);
+    };
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+    return () => {
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+    };
   }, []);
 
   if (closed) {
@@ -110,15 +172,52 @@ export const MinimapOverlay: React.FC<MinimapOverlayProps> = ({
 
   return (
     <aside
+      ref={mapRef}
       aria-label="Oamaru Victorian Circuit Minimap"
-      className="fixed top-3 right-3 sm:top-5 sm:right-6 z-25 w-[172px] sm:w-[214px] rounded-xl border border-white/15 bg-[#161411]/92 p-2 sm:p-2.5 shadow-xl"
+      className={`fixed top-3 right-3 z-25 rounded-xl border border-white/15 bg-[#161411]/92 shadow-xl ${collapsed ? 'min-h-[36px]' : 'overflow-hidden'}`}
+      style={{
+        width: collapsed ? 'auto' : `${mapWidth}px`,
+        height: collapsed ? 'auto' : `${mapHeight}px`,
+        maxWidth: 'calc(100vw - 16px)',
+        maxHeight: 'calc(100vh - 16px)',
+        left: collapsed ? 'auto' : undefined,
+        top: collapsed ? 'auto' : undefined,
+      }}
     >
-      <div className="mb-1.5 flex items-center justify-between gap-1 text-[11px] text-[#CFC5B4]">
+      <div
+        className="mb-1.5 flex items-center justify-between gap-1 text-[11px] text-[#CFC5B4]"
+        onPointerDown={(e) => {
+          if (e.button !== 0 || !mapRef.current) return;
+          e.preventDefault();
+          const rect = mapRef.current.getBoundingClientRect();
+          dragStateRef.current = {
+            startX: e.clientX,
+            startY: e.clientY,
+            origLeft: rect.left,
+            origTop: rect.top,
+          };
+          setIsDragging(true);
+        }}
+        style={{ cursor: collapsed ? 'default' : 'move', userSelect: collapsed ? 'none' : 'none' }}
+      >
         <span className="font-medium text-[#F4EFE6] truncate">1914 Map</span>
         <div className="flex items-center gap-1.5">
           <span className="font-mono-tabular text-[#9E9280]">
             P{telemetry.racePosition} · L{telemetry.lapCount}
           </span>
+          <button
+            type="button"
+            onClick={() => setCollapsed((prev) => !prev)}
+            aria-label={collapsed ? 'Expand circuit map' : 'Collapse circuit map'}
+            title={collapsed ? 'Expand map' : 'Collapse map'}
+            className="min-h-[32px] min-w-[32px] sm:min-h-0 sm:min-w-0 flex items-center justify-center rounded p-1 text-[#9E9280] hover:bg-white/10 hover:text-white transition-colors cursor-pointer"
+          >
+            {collapsed ? (
+              <ChevronUp className="h-3.5 w-3.5" />
+            ) : (
+              <ChevronDown className="h-3.5 w-3.5" />
+            )}
+          </button>
           <button
             type="button"
             onClick={() => setClosed(true)}
@@ -131,13 +230,15 @@ export const MinimapOverlay: React.FC<MinimapOverlayProps> = ({
         </div>
       </div>
 
-      <div className="relative overflow-hidden rounded-lg border border-white/10 bg-[#23211d]">
-        <svg
-          width={MAP_SIZE}
-          height={MAP_SIZE}
-          viewBox={`0 0 ${MAP_SIZE} ${MAP_SIZE}`}
-          className="block w-full h-auto"
-        >
+      {!collapsed && (
+        <>
+          <div className="relative overflow-hidden rounded-lg border border-white/10 bg-[#23211d]">
+            <svg
+              width={MAP_SIZE}
+              height={MAP_SIZE}
+              viewBox={`0 0 ${MAP_SIZE} ${MAP_SIZE}`}
+              className="block w-full h-auto"
+            >
           {/* Oamaru Harbour Water (East of x=107) */}
           <rect x={toMapX(107)} y={-400} width={500} height={900} fill="#1f3a48" />
 
@@ -238,6 +339,7 @@ export const MinimapOverlay: React.FC<MinimapOverlayProps> = ({
           })}
 
           {/* Start / Finish Banner Line at (-56, 0) */}
+          {hasStartedOnce && (
           <line
             x1={toMapX(-56)}
             y1={toMapY(-7.2)}
@@ -247,6 +349,7 @@ export const MinimapOverlay: React.FC<MinimapOverlayProps> = ({
             strokeWidth={2.2}
             strokeDasharray="2 1.5"
           />
+          )}
 
           {/* Next Circuit Checkpoint Marker */}
           <circle
@@ -467,6 +570,55 @@ export const MinimapOverlay: React.FC<MinimapOverlayProps> = ({
           <span className="text-[#6aa9d9] font-semibold">C</span> Capt
         </div>
       )}
+      {!collapsed && (
+        <>
+          {/* Resize Edge Handles: Right (width) + Bottom (height), double-click to reset default size */}
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize map width"
+        title="Drag to resize map width · Double-click to reset"
+        onPointerDown={(e) => {
+          if (e.button !== 0) return;
+          e.preventDefault();
+          e.stopPropagation();
+          resizeStateRef.current = {
+            edge: 'right',
+            startX: e.clientX,
+            startY: e.clientY,
+            origWidth: mapWidth,
+            origHeight: mapHeight,
+          };
+          setIsResizing(true);
+        }}
+        onDoubleClick={() => setMapWidth(Math.min(214, window.innerWidth - 32))}
+        className="group absolute top-0 bottom-0 -right-1 z-20 w-2 cursor-ew-resize touch-none select-none"
+      />
+      <div
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label="Resize map height"
+        title="Drag to resize map height · Double-click to reset"
+        onPointerDown={(e) => {
+          if (e.button !== 0) return;
+          e.preventDefault();
+          e.stopPropagation();
+          resizeStateRef.current = {
+            edge: 'bottom',
+            startX: e.clientX,
+            startY: e.clientY,
+            origWidth: mapWidth,
+            origHeight: mapHeight,
+          };
+          setIsResizing(true);
+        }}
+        onDoubleClick={() => setMapHeight(250)}
+        className="group absolute left-0 right-0 -bottom-1 z-20 h-2 cursor-ns-resize touch-none select-none"
+      />
+      </>
+    )}
+      </>
+    )}
     </aside>
   );
 };

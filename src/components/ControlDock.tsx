@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   BookOpen,
   Briefcase,
@@ -184,9 +184,11 @@ export const ControlDock: React.FC<ControlDockProps> = ({
   onHandbrakeLeverChange,
   onPedalPress,
 }) => {
-  const [collapsed, setCollapsed] = useState(() =>
-    typeof window !== 'undefined' ? window.innerWidth < 768 : false
-  );
+  const [collapsed, setCollapsed] = useState(() => {
+    if (typeof window !== 'undefined') return window.innerWidth < 768;
+    return false;
+  });
+  // Toggle collapsed state manually (not just based on width)
   const [openThemes, setOpenThemes] = useState({
     driving: true,
     climate: false,
@@ -385,7 +387,7 @@ export const ControlDock: React.FC<ControlDockProps> = ({
   return (
     <>
       {/* Top-Left Minimal Heritage Title & Dynamic Season/Weather Context */}
-      <header className="pointer-events-none fixed top-3 left-3 sm:top-5 sm:left-6 z-10 max-w-[calc(100vw-180px)] sm:max-w-xl">
+      <header className="fixed top-3 left-3 sm:top-5 sm:left-6 z-10 max-w-[calc(100vw-180px)] sm:max-w-xl">
         <h1 className="font-display text-lg sm:text-2xl font-semibold tracking-tight text-[#F6F1E7] drop-shadow-[0_2px_6px_rgba(0,0,0,0.65)] truncate">
           Oamaru, 1914
         </h1>

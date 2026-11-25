@@ -8,7 +8,7 @@ Do the passes in order. Stop after a pass if the frame time gets worse on the ha
 
 - Procedural whitestone facades, signs, iron lace and the clock in `src/sim/textures.ts` and `src/sim/oamaruWorld.ts`. That is the art direction. Photo textures would make the cones, horses and people look poorer beside them.
 - Model T paint and brass numbers in `buildFordModelT` (`src/sim/modelTGeometry.ts`). Clearcoat `0.85` and the brass metalness start working once the environment map is outdoor.
-- The brass dock, type and start shield (`src/components/ControlDock.tsx`, `src/index.css`, `src/components/StartShieldModal.tsx`).
+- The brass dock, type and start shield (`src/index.css`, `src/components/StartShieldModal.tsx`). ControlDock layout and collapse/expand behavior are now in scope per UI fixes.
 - Physics, errands, passengers, audio and traffic behaviour.
 
 ## Where the picture is made today

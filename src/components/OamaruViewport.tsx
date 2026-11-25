@@ -65,6 +65,7 @@ interface OamaruViewportProps {
   resetTriggerRef?: React.MutableRefObject<number>;
   recorderControlRef: React.MutableRefObject<RecorderControlHandle | null>;
   startShieldOpen: boolean;
+  hasStartedOnce: boolean;
   passengerHud: PassengerHudState;
   onPassengerHudChange: (hud: PassengerHudState) => void;
   onPassengerAction: () => void;
@@ -326,6 +327,7 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
   resetTriggerRef,
   recorderControlRef,
   startShieldOpen,
+  hasStartedOnce,
   passengerHud,
   onPassengerHudChange,
   onPassengerAction,
@@ -1931,7 +1933,7 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
       // Adjust driver position based on suspension compression so feet don't penetrate car floor
       const avgCompression = state.wheels.reduce((sum, w) => sum + w.compression, 0) / 4;
       const compressionOffset = (avgCompression - 0.45) * 0.12; // proportional offset
-      ;(modelT.driverRig as any).group.position.y = 0.63 - compressionOffset; // driver sinks as suspension compresses
+      modelT.driverRig.root.position.y = 0.63 - compressionOffset; // driver sinks as suspension compresses
 
       modelT.handCrank.rotation.z = state.crankingProgress > 0 ? state.crankingProgress * Math.PI * 6 : 0;
       modelT.handbrakeLever.rotation.x = -(state.handbrakePos - 0.5) * 0.65;
@@ -2699,6 +2701,7 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
         waitingPassengers={minimapMeta.waitingPassengers}
         passengerTarget={minimapMeta.passengerTarget}
         errandTarget={activeErrandTarget}
+        hasStartedOnce={hasStartedOnce}
       />
 
       {contextLost && (
