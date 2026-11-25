@@ -1928,6 +1928,11 @@ export const OamaruViewport: React.FC<OamaruViewportProps> = ({
         modelT.wheelHubs[i].position.y = 0.38 + (state.wheels[i].compression - 0.45) * 0.14;
       }
 
+      // Adjust driver position based on suspension compression so feet don't penetrate car floor
+      const avgCompression = state.wheels.reduce((sum, w) => sum + w.compression, 0) / 4;
+      const compressionOffset = (avgCompression - 0.45) * 0.12; // proportional offset
+      ;(modelT.driverRig as any).group.position.y = 0.63 - compressionOffset; // driver sinks as suspension compresses
+
       modelT.handCrank.rotation.z = state.crankingProgress > 0 ? state.crankingProgress * Math.PI * 6 : 0;
       modelT.handbrakeLever.rotation.x = -(state.handbrakePos - 0.5) * 0.65;
       modelT.sparkLeverPivot.rotation.y = (state.sparkAdvance - 0.5) * 1.1;

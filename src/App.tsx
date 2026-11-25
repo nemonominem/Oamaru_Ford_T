@@ -103,6 +103,8 @@ export default function App() {
     lastSavedFilename: null,
   });
   const [controlMode, setControlMode] = useState<ControlMode>('standard');
+  const [qualityMode, setQualityMode] = useState<'fun' | 'realistic'>('fun');
+  const [showHUD, setShowHUD] = useState(true);
   const [muted, setMuted] = useState<boolean>(false);
   const [headlightsOn, setHeadlightsOn] = useState<boolean>(false);
   const [wiperOn, setWiperOn] = useState<boolean>(false);
@@ -346,6 +348,14 @@ export default function App() {
     });
   }, []);
 
+  const handleQualityChange = useCallback(() => {
+    setQualityMode((prev) => prev === 'fun' ? 'realistic' : 'fun');
+  }, []);
+
+  const handleToggleHUD = useCallback(() => {
+    setShowHUD((prev) => !prev);
+  }, []);
+
   const handleStartOrAdvanceErrand = useCallback(() => {
     audioRef.current.init();
     setErrandState((prev) => {
@@ -565,6 +575,10 @@ export default function App() {
         muted={muted}
         headlightsOn={headlightsOn}
         wiperOn={wiperOn}
+        qualityMode={qualityMode}
+        onQualityChange={handleQualityChange}
+        showHUD={showHUD}
+        onToggleHUD={handleToggleHUD}
         errandState={errandState}
         passengerHud={passengerHud}
         onPassengerAction={handlePassengerAction}

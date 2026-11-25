@@ -199,10 +199,10 @@ export function createInitialVehicleState(): VehicleState {
     courtesyScore: 100,
     racePosition: 1,
     wheels: [
-      { compression: 0.4, slipRatio: 0, grounded: true, surface: 'macadam', steerAngle: 0, spinAngle: 0 },
-      { compression: 0.4, slipRatio: 0, grounded: true, surface: 'macadam', steerAngle: 0, spinAngle: 0 },
-      { compression: 0.4, slipRatio: 0, grounded: true, surface: 'macadam', steerAngle: 0, spinAngle: 0 },
-      { compression: 0.4, slipRatio: 0, grounded: true, surface: 'macadam', steerAngle: 0, spinAngle: 0 },
+      { compression: 0.45, slipRatio: 0, grounded: true, surface: 'macadam', steerAngle: 0, spinAngle: 0 },
+      { compression: 0.45, slipRatio: 0, grounded: true, surface: 'macadam', steerAngle: 0, spinAngle: 0 },
+      { compression: 0.45, slipRatio: 0, grounded: true, surface: 'macadam', steerAngle: 0, spinAngle: 0 },
+      { compression: 0.45, slipRatio: 0, grounded: true, surface: 'macadam', steerAngle: 0, spinAngle: 0 },
     ],
   };
 }

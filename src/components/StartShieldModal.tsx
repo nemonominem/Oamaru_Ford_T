@@ -1,7 +1,7 @@
 import React, { useEffect } from 'react';
 import { BookOpen, ExternalLink, Play, X } from 'lucide-react';
 
-export const APP_VERSION = 'v1.4.0';
+export const APP_VERSION = 'v1.5.0';
 export const GITHUB_REPO_URL = 'https://github.com/gdemaneuf/oamaru-1914-model-t';
 
 interface StartShieldModalProps {
@@ -87,7 +87,7 @@ export const StartShieldModal: React.FC<StartShieldModalProps> = ({
                 className="min-h-[44px] flex items-center gap-2 rounded-lg bg-[#D4A656] px-5 py-2.5 text-sm font-semibold text-[#17130E] hover:bg-[#e1b76a] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
               >
                 <Play className="h-4 w-4 fill-current" />
-                <span>{hasStartedOnce ? 'Resume Driving' : 'Start Driving'}</span>
+                <span>{hasStartedOnce ? 'Ready to Race' : 'Pre-Race'}</span>
               </button>
 
               <button

@@ -91,6 +91,10 @@ interface ControlDockProps {
   onSparkAdvanceChange: (val: number) => void;
   onHandbrakeLeverChange: (val: number) => void;
   onPedalPress: (pedal: 'low' | 'reverse' | 'brake', pressed: boolean) => void;
+  qualityMode: 'fun' | 'realistic',
+  onQualityChange: () => void,
+  showHUD: boolean,
+  onToggleHUD: () => void,
 }
 
 const SURFACE_LABELS: Record<SurfaceType, string> = {
@@ -189,6 +193,8 @@ export const ControlDock: React.FC<ControlDockProps> = ({
     view: false,
     town: false,
   });
+  const [qualityMode, setQualityMode] = useState<'fun' | 'realistic'>('fun');
+  const [showHUD, setShowHUD] = useState(true);
   const [brakeHeld, setBrakeHeld] = useState(false);
   const [unityDrawerOpen, setUnityDrawerOpen] = useState(false);
   const [heritageDrawerOpen, setHeritageDrawerOpen] = useState(false);
@@ -1095,6 +1101,34 @@ export const ControlDock: React.FC<ControlDockProps> = ({
                           <Lightbulb className="h-3.5 w-3.5" />
                           <span>Lamps</span>
                         </button>
+
+
+                        <button
+                          type="button"
+                          onClick={() => setQualityMode((prev) => prev === "fun" ? "realistic" : "fun")}
+                          className={`rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1 {
+                            qualityMode === "fun"
+                              ? "border-[#D4A656]/60 bg-[#D4A656]/20 text-[#D4A656]"
+                              : "border-white/12 bg-white/6 text-[#CFC5B4] hover:text-white"
+                          }`}
+                          title="Toggle Quality Mode (F)"
+                        >
+                          <span className="text-[10px] font-semibold">F</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setShowHUD((prev) => !prev)}
+                          className={`rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1 {
+                            showHUD
+                              ? "border-[#D4A656]/60 bg-[#D4A656]/20 text-[#D4A656]"
+                              : "border-white/12 bg-white/6 text-[#CFC5B4] hover:text-white"
+                          }`}
+                          title="Toggle HUD (H)"
+                        >
+                          <span className="text-[10px] font-semibold">HUD</span>
+                        </button>
+
 
                         <button
                           type="button"
